@@ -7,6 +7,7 @@ import {
 } from "iterate/signed";
 import type { Verified } from "iterate/workers";
 import { configOf, type Env, issuerOf } from "./env.ts";
+import { underPaths } from "./key-rules.ts";
 import { isMember } from "./members.ts";
 import { isForThisMind, mindKeyOf } from "./minds.ts";
 import { stackKeyOf } from "./stack-key.ts";
@@ -24,7 +25,10 @@ export type KnownKey = {
   publicKey: string;
   label: string;
   format: Envelope["signature"]["format"];
-  paths?: string[]; // none: a person's key, or another mind's
+  /** A service's key adds events under these. A person's key with paths is a DEVICE'S KEY
+   *  (./keys-pages.ts `deviceKeyAdded`): it signs as its person at these paths alone. None: a
+   *  person's passkey, or another mind's key. */
+  paths?: string[];
   /** Another mind's: what this Worker writes once a statement signed with the key verified (it
    *  pins a row by hostname, ./minds.ts), or why the statement is refused after all. */
   settle?: () => Promise<string | null>;
@@ -68,6 +72,10 @@ export async function verifiedStatement(
     return { refused: "the statement is for another mind" };
   if (statement.from && key.principal.kind !== "mind")
     return { refused: "a statement from a mind is signed with that mind's key" };
+  // A DEVICE'S KEY SIGNS AS ITS PERSON AT ITS PATHS ALONE. It is a plain key, which cannot say
+  // that it checked who pressed, so it adds no member, no key and no rule: those take a passkey.
+  if (key.principal.email && key.paths && !underPaths(statement.path, key.paths))
+    return { refused: `this device's key signs under ${key.paths.join(", ")} alone` };
   const now = Date.now();
   if (statement.expires <= now) return { refused: "the statement has expired" };
   if (statement.expires > now + MAX_LIFETIME_MS)
@@ -102,6 +110,7 @@ export async function verifiedStatement(
       member:
         key.principal.email && !key.outsider ? await isMember(env, key.principal.email) : false,
       userVerified: checked.userVerified,
+      ...(key.principal.email && key.paths && { device: true as const }),
     },
     statement,
     paths: key.paths,
@@ -165,6 +174,8 @@ async function knownKey(env: Env, id: string): Promise<KnownKey | null> {
       ...common,
       principal: { actor: row.user_id, email: row.email },
       outsider: Boolean(row.outsider),
+      // a device's key: a passkey has none
+      ...(row.paths && { paths: JSON.parse(row.paths) as string[] }),
     };
   if (row.actor && row.paths)
     return {

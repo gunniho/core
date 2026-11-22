@@ -2,8 +2,10 @@ import { base64url, keyIdOf, signedP256, statementText } from "iterate/signed";
 import { expect, test, vi } from "vitest";
 import { sessionCookie } from "./cookies.ts";
 import { enrolPayloadOf } from "./key-rules.ts";
-import { keysPagesResponse, statementHtml } from "./keys-pages.ts";
+import { deviceKeyCodeOf, keysPagesResponse, statementHtml } from "./keys-pages.ts";
+import { verifiedStatement } from "./keys.ts";
 import { KEY_ADDED, KEY_REMOVED } from "./signed-change.ts";
+import { admittedStatement } from "./statements.ts";
 import { sqliteStack } from "./test-support.ts";
 
 const ISSUER = "https://iterate.example.com";
@@ -288,6 +290,79 @@ test("one key of iterate Cloud at a time: a second Cloud's page says which host 
 /** A stack on SQLite whose owner holds one passkey, "A phone", and is signed in with it. The
  *  owner's statements are signed by a P-256 key of theirs, which stands in for a passkey's
  *  signature: a test has no authenticator. */
+test("a device's key: the page shows its code, a passkey's statement adds it for the member, and it signs at /approvals alone", async () => {
+  const stack = await stackOf();
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const publicKey = base64url(
+    new Uint8Array((await crypto.subtle.exportKey("spki", pair.publicKey)) as ArrayBuffer),
+  );
+  const key = await keyIdOf(publicKey);
+  const link = { publicKey, label: "A phone's app" };
+  const device = (init?: RequestInit, query = "") =>
+    keysPagesResponse(
+      stack.env,
+      new Request(`${ISSUER}/keys/device${query}`, {
+        ...init,
+        headers: { cookie: stack.cookie, ...init?.headers },
+      }),
+    );
+  const page = await device(undefined, `?${new URLSearchParams(link)}`);
+  const html = await page!.text();
+  expect({
+    status: page!.status,
+    showsTheCode: html.includes(`<code>${deviceKeyCodeOf(key)}</code>`),
+    saysWhatItMay: html.includes("It changes no rule, adds no key and no member"),
+  }).toEqual({ status: 200, showsTheCode: true, saysWhatItMay: true });
+  const post = (signed: string) =>
+    device({
+      method: "POST",
+      headers: { origin: ISSUER, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...link, decision: "allow", signed }),
+    });
+  const payload = { key, device: true, paths: ["/approvals"], label: link.label };
+  // a session alone adds nothing, and neither does a statement for another reach
+  expect((await post(""))!.status).toBe(403);
+  expect((await post(await stack.signed(KEY_ADDED, { ...payload, paths: ["/"] })))!.status).toBe(
+    403,
+  );
+  expect((await post(await stack.signed(KEY_ADDED, payload)))!.status).toBe(200);
+  expect(
+    stack.db.prepare("select user_id, paths, format, added_via from keys where id = ?").get(key),
+  ).toEqual({
+    user_id: "user_owner",
+    paths: '["/approvals"]',
+    format: "p256",
+    added_via: "device-page",
+  });
+  expect(await pageOf(stack)).toContain(
+    "device key: approves and rejects what waits for a member",
+  );
+  const says = async (path: string, type: string) => {
+    const now = Date.now();
+    return signedP256(
+      statementText({ mind: "iterate.example.com", path, type, at: now, expires: now + 60_000 }),
+      pair.privateKey,
+      key,
+    );
+  };
+  // it signs as its member where the gate reads, and nowhere else: no key, no member, no rule
+  expect(
+    await verifiedStatement(
+      stack.env,
+      await says("/approvals", "events.iterate.com/approval/act-approved"),
+    ),
+  ).toMatchObject({ signer: { principal: { email: OWNER }, key, member: true, device: true } });
+  expect(await verifiedStatement(stack.env, await says("/", KEY_ADDED))).toEqual({
+    refused: "this device's key signs under /approvals alone",
+  });
+  expect(await admittedStatement(stack.env, await says("/approvals", "note/said"))).toMatchObject({
+    refused: expect.stringContaining("adds no events"),
+  });
+});
+
 async function stackOf() {
   const stack = sqliteStack();
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [

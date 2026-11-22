@@ -323,6 +323,15 @@ export class ActsGate extends DurableObject<Env> {
     // as a sign-in asks: a passkey that checked nobody is anyone's who holds the device
     if (verified.signer.userVerified === false)
       return refuse("the passkey did not check that it is you, by a PIN, a fingerprint or a face");
+    // A DEVICE'S KEY (a member's plain key, core/auth-worker/src/keys-pages.ts) approves and
+    // rejects what waits, and nothing else: it cannot say that it checked who pressed, so the
+    // rules and the lock, which decide what waits at all, take a passkey.
+    if (
+      verified.signer.device &&
+      statement.type !== ACT_APPROVED &&
+      statement.type !== ACT_REJECTED
+    )
+      return refuse("a device's key approves and rejects what waits: a passkey changes the rules or the lock");
     if (statement.type === GATE_LOCKED || statement.type === GATE_UNLOCKED) {
       this.ctx.storage.kv.put("locked", statement.type === GATE_LOCKED);
       return done(statement.type, {});

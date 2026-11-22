@@ -160,6 +160,10 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
     return this.env.SECRETS.actRules();
   }
 
+  async heldActs() {
+    return this.env.SECRETS.heldActs();
+  }
+
   async listSecrets() {
     return this.env.SECRETS.listSecrets();
   }

@@ -17,6 +17,7 @@ import { ActsGate } from "./acts-gate.ts";
 
 const MEMBER = "key-member";
 const UNCHECKED = "key-member-unchecked";
+const DEVICE = "key-member-device";
 const MAIL = JSON.stringify({
   act: "email.send",
   from: "agent@example.com",
@@ -142,6 +143,26 @@ test("a member's passkey that did not check its user approves nothing, rejects n
     await decide(UNCHECKED, { type: GATE_LOCKED }),
   ]).toMatchObject([refused, refused, refused]);
   expect(await gate.state()).toMatchObject({ locked: false, held: [{ state: "waiting" }] });
+});
+
+test("a member's device key approves and rejects what waits, and changes no rule and no lock", async () => {
+  const { gate, decide } = vault();
+  await gate.setRules({ rules: [{ verb: "email.send" }, { verb: "itx.whatsapp.*" }], by: member });
+  const mail = (await gate.act({ text: MAIL })) as { digest: string };
+  const call = (await gate.act({ text: CALL })) as { digest: string };
+  const passkeyOnly = { result: { error: expect.stringContaining("a passkey changes the rules") } };
+  expect([
+    await decide(DEVICE, { type: RULE_SET, payload: { rules: [] } }),
+    await decide(DEVICE, { type: GATE_LOCKED }),
+    await decide(DEVICE, { type: GATE_UNLOCKED }),
+  ]).toMatchObject([passkeyOnly, passkeyOnly, passkeyOnly]);
+  expect(await gate.state()).toMatchObject({ locked: false, rules: [{}, {}] });
+  expect(await decide(DEVICE, { type: ACT_APPROVED, about: [mail.digest] })).toMatchObject({
+    facts: [{ path: "/approvals", events: [{ type: ACT_APPROVED }] }],
+  });
+  expect(
+    await decide(DEVICE, { type: ACT_REJECTED, about: [call.digest], payload: { reason: "no" } }),
+  ).toMatchObject({ facts: [{ events: [{ type: ACT_REJECTED }] }] });
 });
 
 test("a rejection names its reason, and its caller hears who said no", async () => {
@@ -344,6 +365,7 @@ function vault() {
           member: envelope.signature.key.startsWith(MEMBER),
           // a passkey says whether it checked its user; this one did not
           ...(envelope.signature.key === UNCHECKED && { userVerified: false }),
+          ...(envelope.signature.key === DEVICE && { device: true }),
         },
         statement: JSON.parse(envelope.statement),
       }),

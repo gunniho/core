@@ -84,6 +84,15 @@ const KeyAdded = z.union([
     cloud: z.string().optional(),
     addedBy: z.string(),
   }),
+  // a member's device key (./keys-pages.ts `deviceKeyAnswered`): it signs as the member at `paths`
+  SignedBy.extend({
+    key: z.string().min(1),
+    label: z.string(),
+    format: z.literal("p256"),
+    device: z.literal(true),
+    paths: z.array(z.string()),
+    at: z.number(),
+  }),
 ]);
 const KeyRemoved = z.object({
   key: z.string().min(1),

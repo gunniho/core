@@ -38,6 +38,10 @@ const KEYS_PATH = "/keys";
 const KEYS_JSON_PATH = "/keys.json";
 const REMOVE_PATH = "/keys/remove";
 const ENROL_PATH = "/keys/enrol";
+const DEVICE_PATH = "/keys/device";
+/** WHERE A DEVICE'S KEY SIGNS: the context of the vault's gate for acts (iterate/acts
+ *  `APPROVALS_CONTEXT`), and nowhere else (./keys.ts `verifiedStatement`). */
+const DEVICE_KEY_PATHS = ["/approvals"];
 
 const CHALLENGE_SECONDS = 5 * 60;
 const CHALLENGE_KEY_PREFIX = "iterate-key-challenge:";
@@ -53,7 +57,8 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     (pathname === KEYS_PATH && (get || post)) ||
     (pathname === KEYS_JSON_PATH && get) ||
     (pathname === REMOVE_PATH && post) ||
-    (pathname === ENROL_PATH && (get || post));
+    (pathname === ENROL_PATH && (get || post)) ||
+    (pathname === DEVICE_PATH && (get || post));
   if (!known) return null;
   const issuer = issuerOf(env);
   const config = configOf(env);
@@ -80,6 +85,8 @@ export async function keysPagesResponse(env: Env, request: Request): Promise<Res
     return post
       ? passkeyAdded(env, request, session)
       : keysPage(env, session, honouredNext(url.searchParams.get("next"), config));
+  if (pathname === DEVICE_PATH)
+    return get ? devicePage(env, url, session) : deviceKeyAnswered(env, request, session);
   if (get) return enrolPage(env, url, session);
   return serviceKeyAnswered(env, request, session);
 }
@@ -139,7 +146,9 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
       ? `service key for ${text(key.actor)}${published}: can ${text(scope)}`
       : key.format === "webauthn"
         ? "passkey"
-        : text(key.format);
+        : key.paths
+          ? "device key: approves and rejects what waits for a member"
+          : text(key.format);
     // a key that lends asks for a token each hour it runs, so this says whether its service is alive
     const used = key.provide
       ? `, ${key.last_used_at ? `last used ${day(key.last_used_at)}` : "never used"}`
@@ -175,7 +184,7 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
     title: `Your keys for ${mind}`,
     wide: true,
     body: `<h1>Your keys for ${text(mind)}</h1>
-      <p>Your passkeys sign you in and approve changes. Service keys let a service act in this mind, and any member can remove one.</p>
+      <p>Your passkeys sign you in and approve changes. A device key approves and rejects what waits for a member, from an app on that device. Service keys let a service act in this mind, and any member can remove one.</p>
       ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">No keys yet.</p>`}
       <p id="removal" class="muted" role="status"></p>
       <form ${formAttributes}>
@@ -509,6 +518,150 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
       <p id="status" class="muted" role="status"></p>`,
     script: `${signScript(mind)}${ENROL_SCRIPT}`,
   });
+}
+
+/** A DEVICE'S KEY, AS ITS APP ASKS FOR IT: `/keys/device?publicKey=…&label=…`. The key is a plain
+ *  P-256 key that the device made and keeps, in its secure hardware where it has one, and never
+ *  sends. Added, it signs as the member who added it, and only what `DEVICE_KEY_PATHS` and the
+ *  gate let it: a yes or a no to a mail or a call that waits (core/secrets-worker/src/acts-gate.ts
+ *  `decide`). The link is anyone's to write, so the page shows the key's first characters, which
+ *  the app shows too: a member who compares them adds the key of the device in their hand. */
+type DeviceKeyRequest = { publicKey: string; label: string };
+
+function deviceKeyRequestOf(input: {
+  get(name: string): unknown;
+}): DeviceKeyRequest | { refused: string } {
+  const publicKey = input.get("publicKey");
+  const label = String(input.get("label") ?? "").trim() || "Device key";
+  if (typeof publicKey !== "string" || !/^[A-Za-z0-9_-]{1,400}$/.test(publicKey))
+    return { refused: "The link names no key of a device." };
+  if (label.length > 100) return { refused: "A device's name is at most 100 characters." };
+  return { publicKey, label };
+}
+
+/** What the member's passkey signs for a device's key: the key, where it signs and its name. */
+const deviceKeyPayloadOf = (key: string, ask: DeviceKeyRequest) => ({
+  key,
+  device: true,
+  paths: DEVICE_KEY_PATHS,
+  label: ask.label,
+});
+
+/** The characters of a key's id that a device's app and this page both show. */
+export const deviceKeyCodeOf = (key: string) => key.slice(0, 8);
+
+async function devicePage(env: Env, url: URL, session: Session): Promise<Response> {
+  const config = configOf(env);
+  const mind = config.controlPlaneHostname;
+  const ask = deviceKeyRequestOf(url.searchParams);
+  if ("refused" in ask) return errorPage(ask.refused, 400);
+  const key = await p256KeyIdOf(env, ask.publicKey);
+  if (!key) return errorPage("The device's key is not one this mind can use.", 400);
+  const next = honouredNext(url.searchParams.get("next"), config);
+  const hidden = (name: string, value: string) =>
+    `<input type="hidden" name="${name}" value="${text(value)}">`;
+  return page({
+    title: "Add a device key",
+    wide: true,
+    body: `<h1>Add a device key</h1>
+      <p>With this key, an app on the device approves and rejects the mail and the calls that wait for a member of ${text(mind)}, as <strong>${text(session.email)}</strong>, with no passkey. It changes no rule, adds no key and no member, and signs you in nowhere.</p>
+      <p><strong>Sign only if you asked for this on the device just now, and the device shows this code:</strong> <code>${text(deviceKeyCodeOf(key))}</code></p>
+      ${factsTable([
+        { label: "Device", value: text(ask.label), note: "The name is from the link: nobody checked it." },
+        { label: "Key", value: `<code>${text(key)}</code>` },
+        { label: "Signs as", value: text(session.email) },
+        { label: "May", value: "approve and reject what waits on the approvals page" },
+      ])}
+      <form method="post" action="${DEVICE_PATH}" class="actions" data-device="${text(JSON.stringify(deviceKeyPayloadOf(key, ask)))}">
+        ${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${next ? hidden("next", next) : ""}
+        ${hidden("decision", "cancel")}${hidden("signed", "")}
+        <button type="submit" data-allow>Sign with passkey</button>
+        <button type="submit" class="link">Cancel</button>
+      </form>
+      <p id="status" class="muted" role="status"></p>`,
+    script: `${signScript(mind)}${DEVICE_SCRIPT}`,
+  });
+}
+
+const DEVICE_SCRIPT = `
+const form = document.querySelector("form[data-device]");
+const status = document.getElementById("status");
+form.addEventListener("submit", async (event) => {
+  if (!event.submitter?.hasAttribute("data-allow") || form.signed.value) return;
+  event.preventDefault();
+  try {
+    statusSay(status, "Waiting for your passkey…");
+    form.signed.value = JSON.stringify(await signedStatement({ type: "${KEY_ADDED}", payload: JSON.parse(form.dataset.device) }));
+    form.decision.value = "allow";
+    form.submit();
+  } catch (error) {
+    statusFailed(status, error, "The key was not added.");
+  }
+});`;
+
+async function deviceKeyAnswered(env: Env, request: Request, session: Session): Promise<Response> {
+  const form = await request.formData();
+  const next = honouredNext(String(form.get("next") || ""), configOf(env));
+  if (form.get("decision") !== "allow")
+    return onward(next, new AccountFacts(), "Nothing was added", "<p>No key was added.</p>");
+  const ask = deviceKeyRequestOf(form);
+  if ("refused" in ask) return errorPage(ask.refused, 400);
+  const key = await p256KeyIdOf(env, ask.publicKey);
+  if (!key) return errorPage("The device's key is not one this mind can use.", 400);
+  // The key lets one more thing sign as this person, so a passkey of theirs signs it: a session
+  // alone, or a page that posts this form for the member, adds nothing.
+  const change = await signedChangeBy(env, form.get("signed"), KEY_ADDED, session.email);
+  if ("refused" in change)
+    return errorPage(`No key was added: ${change.refused}. Sign with one of your passkeys.`, 403);
+  if (JSON.stringify(change.payload) !== JSON.stringify(deviceKeyPayloadOf(key, ask)))
+    return errorPage(
+      "No key was added: the signed statement is for another key, or for another reach.",
+      403,
+    );
+  const at = Date.now();
+  // a key that was removed is never added again: its row stays, and the device makes a new key
+  const { meta } = await env.DB.prepare(
+    `insert into keys (id, user_id, paths, public_key, format, label, added_via, added_by, added_at)
+     values (?1, ?2, ?3, ?4, 'p256', ?5, 'device-page', ?2, ?6)
+     on conflict do nothing`,
+  )
+    .bind(key, session.userId, JSON.stringify(DEVICE_KEY_PATHS), ask.publicKey, ask.label, at)
+    .run();
+  const facts = new AccountFacts();
+  if (meta.changes)
+    facts.add(session.userId, {
+      type: "events.iterate.com/account/key-added",
+      payload: {
+        key,
+        label: ask.label,
+        format: "p256",
+        device: true,
+        paths: DEVICE_KEY_PATHS,
+        at,
+        ...signerOf(change),
+      },
+      idempotencyKey: `account/key-added:${key}`,
+    });
+  else {
+    const live = await env.DB.prepare(
+      "select 1 from keys where id = ?1 and user_id = ?2 and paths = ?3 and revoked_at is null",
+    )
+      .bind(key, session.userId, JSON.stringify(DEVICE_KEY_PATHS))
+      .first();
+    if (!live)
+      return errorPage(
+        "This key was removed or is in use for something else, so it was not added. Make a new key on the device.",
+        409,
+        undefined,
+        [{ href: KEYS_PATH, label: "Your keys" }],
+      );
+  }
+  return onward(
+    next,
+    facts,
+    "Added",
+    `<p>${text(ask.label)} can now approve and reject what waits for you.</p>`,
+  );
 }
 
 /** A class for each kind of part of the statement (./key-rules.ts `StatementPart`). */

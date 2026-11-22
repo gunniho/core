@@ -398,7 +398,7 @@ const noneChosen = () => fail("Tick what you mean first.");
 let keys = [];
 const keysLoaded = fetch("/keys.json", { credentials: "same-origin" })
   .then((answer) => answer.ok ? answer.json() : { keys: [] })
-  .then((answer) => { keys = answer.keys || []; document.querySelector("[data-keys]").hidden = keys.length > 0; });
+  .then((answer) => { keys = (answer.keys || []).filter((key) => key.credentialId); document.querySelector("[data-keys]").hidden = keys.length > 0; });
 
 // stay: the caller signs more than one statement, and loads the page again itself.
 async function sign(fields, stay) {

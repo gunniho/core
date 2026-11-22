@@ -95,6 +95,7 @@ export interface Door {
    *  asked about by `sendEmail` alone. */
   act: SecretsService["act"];
   actRules: SecretsService["actRules"];
+  heldActs: SecretsService["heldActs"];
   setActRules: SecretsService["setActRules"];
   proposeActRule: SecretsService["proposeActRule"];
   /** Whether `email` is a member of the mind now, as the auth Worker knows it (`AuthService`). */
@@ -288,6 +289,9 @@ export type Verified =
         member: boolean;
         /** WebAuthn: the person was verified, not only present. */
         userVerified?: boolean;
+        /** A member's device key (core/auth-worker/src/keys-pages.ts): a plain key that an app
+         *  on the member's device holds. It decides what waits for approval, and nothing else. */
+        device?: true;
       };
       statement: Statement;
     }
@@ -425,7 +429,22 @@ export interface SecretsService {
   /** A rule the mind's code asks for: a member signs it on `/secrets/approvals`, or does not. */
   proposeActRule(input: { rule: unknown; from?: string }): Promise<{ id: string; facts: Facts }>;
   actRules(): Promise<{ locked: boolean; rules: ActRule[] }>;
+  /** THE ACTS THAT WAIT FOR A MEMBER, each with its exact text. The mind's own code asked for
+   *  each of them, so the text is nothing new to it. A reader that shows one for a decision
+   *  hashes `text` itself and takes it only when the SHA-256, in hex, is `digest`: the mind's
+   *  code relays this answer and may be hostile. */
+  heldActs(): Promise<HeldActText[]>;
 }
+
+/** `until`: when the act can no longer be approved. `waited`: a caller waits for it now. */
+export type HeldActText = {
+  digest: string;
+  text: string;
+  at: number;
+  until: number;
+  from?: string;
+  waited: boolean;
+};
 
 /** `from` must be one address at a zone of the mind. */
 export type OutboundEmail = {
