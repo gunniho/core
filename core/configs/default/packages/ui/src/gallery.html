@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ritvel Design</title>
+    <link rel="preconnect" href="https://esm.iterate.com" crossorigin />
+    <!-- The pins every page of this mind uses: packages/ui/README.md, "Pins". -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/",
+          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react",
+          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react/",
+          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom",
+          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom/",
+          "@ui-sdk/react/": "https://esm.iterate.com/*@ui-sdk/react@0.1.0-beta.13/",
+          "@ui-sdk/core": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13",
+          "@ui-sdk/core/": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13/",
+          "@ritvel/ui/": "/ui/"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="/ui/ui.css" />
+    <link
+      rel="stylesheet"
+      crossorigin
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/dist/styles.css"
+    />
+    <link rel="stylesheet" href="/theme.css" />
+    <style>
+      body { margin: 0; background: var(--background); color: var(--foreground); font-family: ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+      .g-page { display: grid; grid-template-columns: 13rem minmax(0, 1fr); min-height: 100dvh; }
+      .g-side { position: sticky; top: 0; display: flex; flex-direction: column; gap: 1.25rem; height: 100dvh; padding: 1.5rem 1rem; overflow-y: auto; border-inline-end: 1px solid var(--border); background: var(--sidebar); }
+      .g-brand { padding-inline: 0.5rem; color: inherit; font-size: 0.9375rem; font-weight: 600; text-decoration: none; }
+      .g-side nav { display: grid; gap: 1px; }
+      .g-side nav a { padding: 0.375rem 0.5rem; border-radius: 6px; color: var(--muted-foreground); font-size: 0.875rem; text-decoration: none; }
+      .g-side nav a[aria-current] { background: var(--sidebar-accent); color: var(--foreground); font-weight: 500; }
+      .g-side a:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+      @media (hover: hover) { .g-side nav a:hover { color: var(--foreground); } }
+      .g-theme { margin-top: auto; padding-inline: 0.5rem; color: var(--muted-foreground); }
+      main { display: grid; align-content: start; gap: 2rem; width: 100%; max-width: 46rem; margin-inline: auto; padding: 2.5rem 1.5rem 6rem; }
+      main > header { display: grid; gap: 0.75rem; }
+      h1 { margin: 0; font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; }
+      main > header p { max-width: 36rem; margin: 0; color: var(--muted-foreground); font-size: 0.9375rem; line-height: 1.55; text-wrap: pretty; }
+      pre { margin: 0; padding: 0.75rem 1rem; overflow-x: auto; border-radius: 8px; background: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.8125rem; line-height: 1.6; }
+      pre:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+      .g-example { display: grid; gap: 0.5rem; min-width: 0; }
+      .g-example > header { display: flex; align-items: center; justify-content: space-between; }
+      .g-example h3 { margin: 0; font-size: 0.875rem; font-weight: 500; }
+      .g-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 1.5rem; border: 1px solid var(--border); border-radius: 10px; }
+      .g-stage > :is(form, .rv-field, .rv-tabs, .rv-card, .rv-input, .rv-input-group, .rv-textarea, .rv-collapsible) { width: 100%; max-width: 22rem; }
+      .g-stage form { display: grid; gap: 1rem; justify-items: start; }
+      .g-stage p { margin: 0; font-size: 0.875rem; line-height: 1.6; }
+      @media (max-width: 44rem) {
+        .g-page { grid-template-columns: minmax(0, 1fr); }
+        .g-side { position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0.75rem; height: auto; padding: 1rem; border-inline-end: 0; border-bottom: 1px solid var(--border); }
+        .g-side nav { display: flex; flex-wrap: wrap; flex-basis: 100%; order: 3; }
+        .g-theme { margin: 0 0 0 auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/ui/gallery.js"></script>
+  </body>
+</html>

@@ -6,6 +6,7 @@ import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
 import { openFile } from "../open-files.ts";
+import { ritvelUi } from "../../packages/ui/files.ts";
 import index from "./index.html";
 import { isNotePath, noteResponse } from "./notes.ts";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -52,7 +53,7 @@ export function docsApp() {
       // the app's own files, and the one theme file that every app of this mind shares
       return serveFiles(request, {
         index,
-        files: { ...files, ...liveReload, "theme.css": theme },
+        files: { ...files, ...liveReload, ...ritvelUi, "theme.css": theme },
       });
     },
   };

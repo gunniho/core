@@ -27,6 +27,7 @@ import { z } from "zod";
 import { GUEST_JOINED, isLive, isLiveGuest, type ShareState } from "../../call/share.ts";
 import { handleSnapshotUpload } from "../../call/snapshot.ts";
 import { openFile } from "../open-files.ts";
+import { ritvelUi } from "../../packages/ui/files.ts";
 import theme from "../theme.css";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -207,8 +208,8 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
       const member = host.auth.memberPage(request);
       if (member) return member;
       // the page's files hold no data: anyone loads them, a guest too
-      if (/^\/[^/]+\.[a-z]+$/.test(pathname))
-        return serveFiles(request, { files: { ...files, "theme.css": theme } });
+      if (/^\/(ui\/)?[^/]+\.[a-z]+$/.test(pathname))
+        return serveFiles(request, { files: { ...files, ...ritvelUi, "theme.css": theme } });
       const [, route = "", agent = ""] = ROUTE.exec(pathname) || [];
       if (route === "snapshot") {
         if (!AGENT.test(agent)) return notFound();

@@ -166,6 +166,12 @@ const apps = [
     icon: BookOpenIcon,
   },
   {
+    name: "Design",
+    about: "The mind's components, live, with their code.",
+    host: "design",
+    icon: BlocksIcon,
+  },
+  {
     name: "Meet",
     about: "Calls and meetings with agents and guests.",
     host: "meet",

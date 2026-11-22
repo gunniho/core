@@ -2,10 +2,10 @@
 // one. A member of the mind also sees every entry that waits, with Approve and Remove. It talks to
 // app.ts alone, with fetch: a person who is no member holds no `itx`.
 import { html, render, useCallback, useEffect, useState } from "@iterate-com/ui/page";
-import { Badge } from "@iterate-com/ui/components/ui/badge";
-import { Button } from "@iterate-com/ui/components/ui/button";
-import { Card, CardContent, CardFooter } from "@iterate-com/ui/components/ui/card";
-import { Textarea } from "@iterate-com/ui/components/ui/textarea";
+import { Badge } from "@ritvel/ui/badge.js";
+import { Button } from "@ritvel/ui/button.js";
+import { Card, CardContent, CardFooter } from "@ritvel/ui/card.js";
+import { Textarea } from "@ritvel/ui/textarea.js";
 
 const post = (path, body) =>
   // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check -- a refusal's body is JSON with its reason: it is read whatever the status, and `ok` goes with it
@@ -133,7 +133,7 @@ function Write({ label, replyTo, onDone }) {
         value=${text}
         maxLength=${1000}
         placeholder=${label}
-        onChange=${(event) => setText(event.target.value)}
+        onValueChange=${setText}
       />
       <div class="guestbook-row">
         <${Button} type="submit" size="sm" disabled=${!text.trim()}>${label}<//>

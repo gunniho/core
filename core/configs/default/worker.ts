@@ -10,6 +10,7 @@ import { installAgents } from "iterate/agents/install";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { dashApp } from "./apps/dash/app.ts";
 import { dashLink, type DashLinkInput } from "./apps/dash/links.ts";
+import { designApp } from "./apps/design/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import {
@@ -90,6 +91,8 @@ const dash = dashApp();
 // (apps.md, "Meet"). The call's facet class is call.ts.
 const meet = meetApp();
 const onboarding = onboardingApp();
+// The component preview library of @ritvel/ui (packages/ui/README.md).
+const design = designApp();
 // The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
@@ -380,6 +383,8 @@ export default class extends IterateConfigEntrypoint {
         return docs.open?.(request) || this.auth.require(request) || docs.fetch(request, this);
       case "dash": // the Dash, for members: the mind seen from above, and every agent's chat
         return dash.open?.(request) || this.auth.require(request) || dash.fetch(request, this);
+      case "design": // the Design app, for members: every component of @ritvel/ui, live
+        return design.open?.(request) || this.auth.require(request) || design.fetch(request);
       case "meet": // Meet, for members and their guests: no guard here, its routes ask for who they need
         return meet.fetch(request, this);
       case "onboarding": // the onboarding app, for members: the steps above the onboarding chat
