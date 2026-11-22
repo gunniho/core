@@ -15,6 +15,7 @@ import type { Person } from "iterate/principal";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
 import { openFile } from "../open-files.ts";
+import { ritvelUi } from "../../packages/ui/files.ts";
 import {
   ENTRY_APPROVED,
   ENTRY_REMOVED,
@@ -92,7 +93,7 @@ export function guestbookApp() {
       if (metadata) return metadata;
       if (url.pathname === "/mcp") return mcpResponse(request, { person, viewer, book });
       // the app's own files, and the one script that every app of this mind shares
-      return serveFiles(request, { index, files: { ...files, ...liveReload } });
+      return serveFiles(request, { index, files: { ...files, ...liveReload, ...ritvelUi } });
     },
   };
 }

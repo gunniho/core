@@ -32,6 +32,8 @@ apps/<name>/
   826 kB for the few a page shows. The import map still names it, so a page that does import it
   keeps working. For an icon the package does not have, import its own file, which is 4 kB:
   `import CompassIcon from "https://esm.iterate.com/lucide-react@1.48.0/dist/esm/icons/compass.js?external=react"`.
+- **Buttons, fields, menus and dialogs come from `@ritvel/ui`** (`packages/ui/`): UI SDK's
+  behaviors with one look. "The mind's own components", below, says how.
 - **One look for every app: `apps/theme.css`.** Each app but the guestbook serves that one file
   at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
   colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's
@@ -145,6 +147,28 @@ are manners, no wall: an unjailed agent can commit to this repo, which is the Da
 walls are the jail (an agent whose scripts run in a jail gets no lend) and the passkey (no tool
 reaches the pages where a member signs). `pageTools: { tools }` adds functions of your own: the
 kit's README has the lines for an `evaluate` tool, and its price.
+
+## The mind's own components
+
+`packages/ui/` is `@ritvel/ui`: [UI SDK](https://ui-sdk.dev)'s unstyled parts (focus, keyboard,
+popups, selection, ARIA) wrapped once, with a class each, and styled in one sheet on the
+variables of `apps/theme.css`. A page imports `@ritvel/ui/<component>.js`; it never imports
+`@ui-sdk/*` itself, and it takes no primitive from `@iterate-com/ui/components/ui/*` that the
+library has. [packages/ui/README.md](packages/ui/README.md) has the components' use, the three
+steps that give an app of your own the library, how to add a component, and the pins.
+
+- **What is there:** button, input, textarea, field, select, menu, dialog, tabs, switch, checkbox,
+  tooltip, collapsible, card, badge, spinner. A component that is missing is added to the
+  library first, then used.
+- **Where it is wired:** every app serves the library and maps it. The guestbook's page is built
+  from it; Meet's and Onboarding's still take the kit's primitives, and move one page at a time
+  (`notMovedYet` in `packages/ui/tests/rules.mjs` names them).
+- **See it:** `https://design.<zone>`, the Design app (`apps/design/`), shows each component live
+  with the code of its examples. On a computer: `node packages/ui/tests/serve.mjs`.
+- **The rules are a test:** `node --test packages/ui/tests/rules.test.mjs`. Run it before a
+  commit that touches a page.
+- **The kit keeps its larger parts:** the Dash shell, the chat, `ContextView` and the repo IDE are
+  `@iterate-com/ui`'s, as the next section says.
 
 ## UI components in a page
 

@@ -9,6 +9,7 @@ import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
 import { openFile } from "../open-files.ts";
+import { ritvelUi } from "../../packages/ui/files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
@@ -31,7 +32,7 @@ export function dashApp() {
       // the app's own files, and the two files that every app of this mind shares
       return serveFiles(request, {
         index,
-        files: { ...files, ...liveReload, "theme.css": theme },
+        files: { ...files, ...liveReload, ...ritvelUi, "theme.css": theme },
       });
     },
   };

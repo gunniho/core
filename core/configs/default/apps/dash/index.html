@@ -17,6 +17,10 @@
           "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react/",
           "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom",
           "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom/",
+          "@ui-sdk/react/": "https://esm.iterate.com/*@ui-sdk/react@0.1.0-beta.13/",
+          "@ui-sdk/core": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13",
+          "@ui-sdk/core/": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13/",
+          "@ritvel/ui/": "/ui/",
           "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
         }
       }
@@ -54,6 +58,9 @@
         if (agent) document.documentElement.dataset.page = "agent";
       }
     </script>
+    <!-- @ritvel/ui's look (packages/ui). It stands before the kit's sheet because its first line
+         fixes the order of the page's cascade layers, and the first sheet to name them decides. -->
+    <link rel="stylesheet" href="/ui/ui.css" />
     <!-- The stylesheet at the address the build serves it from: the shorter one answers with a
          redirect to this one. `crossorigin`, so it comes over the connection the modules use. -->
     <link

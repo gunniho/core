@@ -14,6 +14,10 @@
           "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react/",
           "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom",
           "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261121T223639Z-caf87fc/react-dom/",
+          "@ui-sdk/react/": "https://esm.iterate.com/*@ui-sdk/react@0.1.0-beta.13/",
+          "@ui-sdk/core": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13",
+          "@ui-sdk/core/": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13/",
+          "@ritvel/ui/": "/ui/",
           "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
         }
       }
@@ -25,6 +29,9 @@
     <script>
       window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
     </script>
+    <!-- @ritvel/ui's look (packages/ui). It stands before the kit's sheet because its first line
+         fixes the order of the page's cascade layers, and the first sheet to name them decides. -->
+    <link rel="stylesheet" href="/ui/ui.css" />
     <!-- The kit's stylesheet for a page with the docs editor: everything styles.css holds, and
          the editor's own classes and its live preview's look. It takes the place of styles.css:
          a page links one of the two, never both (the two would disagree about which rule wins). -->

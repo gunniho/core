@@ -1,0 +1,892 @@
+/* ui.css — THE LOOK OF @ritvel/ui. Each component of packages/ui/src carries a class `rv-<name>`,
+   and this file styles that class and the state attributes UI SDK sets on the part
+   (`data-open`, `data-highlighted`, `data-disabled`, …). The colours and the corners are the
+   variables of apps/theme.css, so one change there reaches the kit's parts and ours alike.
+
+   A PAGE LINKS THIS FILE BEFORE THE KIT'S STYLE SHEET. The line below fixes the order of the
+   cascade layers for the whole page, and the first sheet to name them decides it: UI SDK's own
+   few rules lowest, then the kit's resets, then these components, then utility classes, so
+   `className="w-full"` on a component still wins. A page's own unlayered CSS wins over all. */
+@layer ui-sdk, properties, theme, base, components, ritvel, utilities;
+
+@layer ritvel {
+  :where(:root) {
+    --rv-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --rv-radius: calc(var(--radius, 0.625rem) - 2px);
+    --rv-shadow:
+      0 1px 2px light-dark(oklch(0 0 0 / 0.06), oklch(0 0 0 / 0.4)),
+      0 8px 24px -8px light-dark(oklch(0 0 0 / 0.16), oklch(0 0 0 / 0.6));
+    --rv-focus: 0 0 0 3px color-mix(in oklab, var(--ring) 40%, transparent);
+    --rv-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3.5 8.5 3 3 6-7'/%3E%3C/svg%3E");
+    --rv-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  }
+
+  :where([class^="rv-"], [class*=" rv-"]) {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* ── Button ─────────────────────────────────────────────────────────────────────────────── */
+  .rv-button {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.25rem;
+    padding: 0 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--rv-radius);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: default;
+    user-select: none;
+    touch-action: manipulation;
+    transition:
+      background-color 0.15s,
+      border-color 0.15s,
+      color 0.15s,
+      scale 0.12s var(--rv-ease-out);
+
+    & > svg {
+      flex-shrink: 0;
+      width: 1rem;
+      height: 1rem;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+
+    &:active:not([data-disabled], [data-pending]) {
+      scale: 0.97;
+    }
+
+    &:is([data-disabled], :disabled) {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    &[data-pending] {
+      opacity: 0.7;
+      cursor: progress;
+    }
+
+    &[data-variant="secondary"] {
+      background: var(--secondary);
+      color: var(--secondary-foreground);
+    }
+
+    &[data-variant="outline"] {
+      border-color: var(--input);
+      background: transparent;
+      color: var(--foreground);
+    }
+
+    &[data-variant="ghost"] {
+      background: transparent;
+      color: var(--foreground);
+    }
+
+    &[data-variant="destructive"] {
+      background: var(--destructive);
+      color: white;
+    }
+
+    &[data-variant="link"] {
+      height: auto;
+      padding: 0;
+      background: transparent;
+      color: var(--primary);
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+
+    &[data-size="sm"] {
+      gap: 0.375rem;
+      height: 2rem;
+      padding: 0 0.75rem;
+      font-size: 0.8125rem;
+    }
+
+    &[data-size="lg"] {
+      height: 2.5rem;
+      padding: 0 1.5rem;
+    }
+
+    &[data-size="icon"] {
+      width: 2.25rem;
+      padding: 0;
+    }
+
+    &[data-size="icon-sm"] {
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+    }
+  }
+
+  @media (hover: hover) {
+    .rv-button:hover {
+      background: color-mix(in oklab, var(--primary) 90%, var(--background));
+    }
+    .rv-button[data-variant="secondary"]:hover {
+      background: color-mix(in oklab, var(--secondary) 80%, var(--foreground) 6%);
+    }
+    .rv-button:is([data-variant="outline"], [data-variant="ghost"]):hover {
+      background: var(--accent);
+      color: var(--accent-foreground);
+    }
+    .rv-button[data-variant="destructive"]:hover {
+      background: color-mix(in oklab, var(--destructive) 90%, var(--background));
+    }
+    .rv-button[data-variant="link"]:hover {
+      background: transparent;
+      text-decoration-thickness: 2px;
+    }
+  }
+
+  /* A finger needs 44px: the small sizes keep their look and take the room around them. */
+  @media (pointer: coarse) {
+    .rv-button::after {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      width: max(100%, 2.75rem);
+      height: max(100%, 2.75rem);
+      translate: -50% -50%;
+      content: "";
+    }
+  }
+
+  /* ── Input, Textarea, Select trigger ────────────────────────────────────────────────────── */
+  .rv-input,
+  .rv-textarea,
+  .rv-input-group,
+  .rv-select-trigger {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--input);
+    border-radius: var(--rv-radius);
+    background: transparent;
+    color: var(--foreground);
+    font: inherit;
+    font-size: 0.875rem;
+    outline: none;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+
+    &:is([data-invalid], [aria-invalid="true"]) {
+      border-color: var(--destructive);
+    }
+
+    &:is([data-disabled], :disabled) {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .rv-input,
+  .rv-select-trigger {
+    height: 2.25rem;
+    padding: 0 0.75rem;
+  }
+
+  .rv-textarea {
+    display: block;
+    min-height: 4.5rem;
+    padding: 0.5rem 0.75rem;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  :is(.rv-input, .rv-textarea)::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+  }
+
+  :is(.rv-input, .rv-textarea, .rv-select-trigger):focus-visible,
+  .rv-input-group:has(input:focus-visible) {
+    border-color: var(--ring);
+    box-shadow: var(--rv-focus);
+  }
+
+  /* Under 16px, iOS zooms the page when a field takes focus. */
+  @media (pointer: coarse) {
+    .rv-input,
+    .rv-textarea,
+    .rv-select-trigger {
+      font-size: 1rem;
+    }
+  }
+
+  .rv-input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    height: 2.25rem;
+    padding-inline: 0.75rem 0.25rem;
+
+    & .rv-input {
+      flex: 1;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+  }
+
+  .rv-input-clear {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: 0;
+    border-radius: calc(var(--rv-radius) - 2px);
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: default;
+
+    & > svg {
+      width: 0.875rem;
+      height: 0.875rem;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--ring);
+    }
+
+    &:not([data-filled]) {
+      visibility: hidden;
+    }
+  }
+
+  @media (hover: hover) {
+    .rv-input-clear:hover {
+      background: var(--accent);
+      color: var(--foreground);
+    }
+  }
+
+  .rv-select-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    cursor: default;
+    user-select: none;
+    text-align: start;
+    white-space: nowrap;
+
+    &[data-size="sm"] {
+      height: 2rem;
+      padding: 0 0.625rem;
+    }
+
+    &[data-placeholder] {
+      color: var(--muted-foreground);
+    }
+
+    &:not(:has(> svg))::after {
+      flex-shrink: 0;
+      width: 1rem;
+      height: 1rem;
+      background: var(--muted-foreground);
+      content: "";
+      mask: var(--rv-chevron) center / contain no-repeat;
+    }
+  }
+
+  /* ── Field ──────────────────────────────────────────────────────────────────────────────── */
+  .rv-field {
+    display: grid;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+
+  .rv-field-group {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .rv-field-set {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .rv-field-label,
+  .rv-field-legend {
+    padding: 0;
+    color: var(--foreground);
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.25;
+
+    &[data-disabled] {
+      opacity: 0.5;
+    }
+  }
+
+  .rv-field-description,
+  .rv-field-error {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+  }
+
+  .rv-field-description {
+    color: var(--muted-foreground);
+  }
+
+  .rv-field-error {
+    color: var(--destructive);
+  }
+
+  /* ── Popups: the lists of Select and Menu ───────────────────────────────────────────────── */
+  .rv-popup {
+    min-width: max(10rem, var(--anchor-width, 0px));
+    max-height: var(--available-height);
+    margin: 0;
+    padding: 0.25rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--rv-radius) + 2px);
+    background: var(--popover);
+    box-shadow: var(--rv-shadow);
+    color: var(--popover-foreground);
+    font-size: 0.875rem;
+    outline: none;
+    transform-origin: var(--transform-origin);
+    transition:
+      opacity 0.15s var(--rv-ease-out),
+      scale 0.15s var(--rv-ease-out);
+
+    &:is([data-starting-style], [data-ending-style]) {
+      opacity: 0;
+      scale: 0.97;
+    }
+  }
+
+  .rv-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2rem;
+    padding-inline: 0.5rem;
+    border-radius: var(--rv-radius);
+    outline: none;
+    cursor: default;
+    user-select: none;
+
+    &[data-highlighted] {
+      background: var(--accent);
+      color: var(--accent-foreground);
+    }
+
+    &[data-disabled] {
+      opacity: 0.5;
+    }
+
+    &[data-variant="destructive"] {
+      color: var(--destructive);
+    }
+
+    /* The mark of a chosen option, at the end of its row. */
+    &:is([data-selected], [data-checked])::after {
+      flex-shrink: 0;
+      width: 1rem;
+      height: 1rem;
+      margin-inline-start: auto;
+      background: currentColor;
+      content: "";
+      mask: var(--rv-check) center / contain no-repeat;
+    }
+  }
+
+  .rv-group-label {
+    padding: 0.375rem 0.5rem 0.25rem;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  .rv-separator {
+    height: 1px;
+    margin: 0.25rem -0.25rem;
+    border: 0;
+    background: var(--border);
+  }
+
+  .rv-shortcut {
+    margin-inline-start: auto;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  /* ── Tooltip ────────────────────────────────────────────────────────────────────────────── */
+  .rv-tooltip {
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    overflow: visible;
+    border: 0;
+    border-radius: calc(var(--rv-radius) - 2px);
+    background: var(--foreground);
+    color: var(--background);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    transform-origin: var(--transform-origin);
+    transition:
+      opacity 0.12s var(--rv-ease-out),
+      scale 0.12s var(--rv-ease-out);
+
+    &:is([data-starting-style], [data-ending-style]) {
+      opacity: 0;
+      scale: 0.96;
+    }
+
+    &[data-instant] {
+      transition: none;
+    }
+  }
+
+  /* ── Dialog ─────────────────────────────────────────────────────────────────────────────── */
+  .rv-backdrop {
+    position: fixed;
+    inset: 0;
+    background: oklch(0 0 0 / 0.45);
+    transition: opacity 0.2s var(--rv-ease-out);
+
+    &:is([data-starting-style], [data-ending-style]) {
+      opacity: 0;
+    }
+  }
+
+  .rv-dialog {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    width: min(28rem, calc(100% - 2rem));
+    height: fit-content;
+    max-height: calc(100dvh - 2rem);
+    margin: auto;
+    padding: 1.5rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--rv-radius) + 4px);
+    background: var(--popover);
+    box-shadow: var(--rv-shadow);
+    color: var(--popover-foreground);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    outline: none;
+    transition:
+      opacity 0.2s var(--rv-ease-out),
+      scale 0.2s var(--rv-ease-out);
+
+    &:is([data-starting-style], [data-ending-style]) {
+      opacity: 0;
+      scale: 0.97;
+    }
+
+    &::backdrop {
+      background: transparent;
+    }
+
+    /* A sheet is placed by its top: the centring comes off. */
+    &[data-presentation="sheet"] {
+      inset: auto;
+      margin-block: 0;
+      border-end-start-radius: 0;
+      border-end-end-radius: 0;
+    }
+  }
+
+  .rv-dialog-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .rv-dialog-description {
+    margin: 0;
+    color: var(--muted-foreground);
+    text-wrap: pretty;
+  }
+
+  .rv-dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  /* ── Tabs ───────────────────────────────────────────────────────────────────────────────── */
+  .rv-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+
+    &[data-orientation="vertical"] {
+      flex-direction: row;
+    }
+  }
+
+  .rv-tabs-list {
+    display: inline-flex;
+    align-self: flex-start;
+    gap: 0.125rem;
+    padding: 0.1875rem;
+    border-radius: calc(var(--rv-radius) + 2px);
+    background: var(--muted);
+
+    &[data-orientation="vertical"] {
+      flex-direction: column;
+    }
+  }
+
+  .rv-tabs-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    height: 1.75rem;
+    padding: 0 0.75rem;
+    border: 0;
+    border-radius: var(--rv-radius);
+    background: transparent;
+    color: var(--muted-foreground);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+    user-select: none;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+
+    &[data-selected] {
+      background: var(--background);
+      box-shadow: 0 1px 2px oklch(0 0 0 / 0.08);
+      color: var(--foreground);
+    }
+
+    &[data-disabled] {
+      opacity: 0.5;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 1px;
+    }
+  }
+
+  @media (hover: hover) {
+    .rv-tabs-tab:hover:not([data-selected], [data-disabled]) {
+      color: var(--foreground);
+    }
+  }
+
+  .rv-tabs-panel {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    outline: none;
+
+    &:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+  }
+
+  /* ── Switch ─────────────────────────────────────────────────────────────────────────────── */
+  .rv-switch {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    width: 2rem;
+    height: 1.15rem;
+    padding: 0 1px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--input);
+    outline: none;
+    cursor: default;
+    transition: background-color 0.15s;
+
+    &[data-checked] {
+      background: var(--primary);
+    }
+
+    &:focus-visible {
+      box-shadow: var(--rv-focus);
+      border-color: var(--ring);
+    }
+
+    &[data-disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .rv-switch-thumb {
+    display: block;
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 999px;
+    background: var(--background);
+    transition: translate 0.15s var(--rv-ease-out);
+
+    &[data-checked] {
+      translate: calc(2rem - 0.9rem - 4px) 0;
+    }
+
+    &[data-checked]:is([dir="rtl"] *) {
+      translate: calc(-2rem + 0.9rem + 4px) 0;
+    }
+  }
+
+  /* ── Checkbox ───────────────────────────────────────────────────────────────────────────── */
+  .rv-checkbox {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    padding: 0;
+    border: 1px solid var(--input);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--primary-foreground);
+    outline: none;
+    cursor: default;
+    transition:
+      background-color 0.12s,
+      border-color 0.12s;
+
+    &:is([data-checked], [data-indeterminate]) {
+      border-color: var(--primary);
+      background: var(--primary);
+    }
+
+    &:focus-visible {
+      border-color: var(--ring);
+      box-shadow: var(--rv-focus);
+    }
+
+    &[data-disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .rv-checkbox-indicator {
+    width: 0.875rem;
+    height: 0.875rem;
+    background: currentColor;
+    mask: var(--rv-check) center / contain no-repeat;
+
+    &[data-indeterminate] {
+      width: 0.5rem;
+      height: 2px;
+      border-radius: 1px;
+      mask: none;
+    }
+  }
+
+  /* A label that holds a switch or a checkbox and its words. */
+  label:has(> :is(.rv-switch, .rv-checkbox)) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  /* ── Collapsible ────────────────────────────────────────────────────────────────────────── */
+  .rv-collapsible-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--foreground);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: default;
+    user-select: none;
+
+    &::before {
+      width: 1rem;
+      height: 1rem;
+      background: var(--muted-foreground);
+      content: "";
+      mask: var(--rv-chevron) center / contain no-repeat;
+      rotate: -90deg;
+      transition: rotate 0.15s var(--rv-ease-out);
+    }
+
+    &[data-open]::before {
+      rotate: 0deg;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+
+    &[data-disabled] {
+      opacity: 0.5;
+    }
+  }
+
+  .rv-collapsible-panel {
+    height: var(--collapsible-panel-height);
+    overflow: hidden;
+    transition: height 0.2s var(--rv-ease-out);
+
+    &:is([data-starting-style], [data-ending-style]) {
+      height: 0;
+    }
+  }
+
+  /* ── Card, Badge, Spinner ───────────────────────────────────────────────────────────────── */
+  .rv-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--rv-radius) + 4px);
+    background: var(--card);
+    color: var(--card-foreground);
+  }
+
+  .rv-card-header {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .rv-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .rv-card-description {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .rv-card-content {
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .rv-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rv-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    height: 1.375rem;
+    padding: 0 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+
+    &[data-variant="secondary"] {
+      background: var(--secondary);
+      color: var(--secondary-foreground);
+    }
+
+    &[data-variant="outline"] {
+      border-color: var(--border);
+      background: transparent;
+      color: var(--foreground);
+    }
+
+    &[data-variant="destructive"] {
+      background: color-mix(in oklab, var(--destructive) 14%, transparent);
+      color: var(--destructive);
+    }
+  }
+
+  .rv-spinner {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid color-mix(in oklab, currentColor 25%, transparent);
+    border-top-color: currentColor;
+    border-radius: 999px;
+    animation: rv-spin 0.7s linear infinite;
+  }
+
+  @keyframes rv-spin {
+    to {
+      rotate: 1turn;
+    }
+  }
+
+  /* ── Less motion: states still change, nothing travels. ─────────────────────────────────── */
+  @media (prefers-reduced-motion: reduce) {
+    .rv-popup,
+    .rv-tooltip,
+    .rv-dialog,
+    .rv-backdrop,
+    .rv-collapsible-panel,
+    .rv-switch-thumb,
+    .rv-collapsible-trigger::before {
+      transition: none;
+    }
+    .rv-button:active {
+      scale: 1;
+    }
+    .rv-spinner {
+      animation-duration: 2s;
+    }
+  }
+}

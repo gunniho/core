@@ -42,6 +42,9 @@ that names your task BEFORE the task, not after a failure:
 
 - Before you build or change an app or a page, use iterate's UI components, add an integration
   package or turn voice devices on: [apps.md](apps.md).
+- Before you add or change a button, a field, a menu, a dialog or any other control in a page:
+  [packages/ui/README.md](packages/ui/README.md). Controls come from `@ritvel/ui`, and a control
+  it lacks is added there first.
 - Before you act on GitHub, Gmail, Calendar or X events, ask for more scopes, register a card on
   the Integrations page, connect an MCP server or mirror this repo to GitHub:
   [accounts.md](accounts.md).
@@ -189,6 +192,9 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   `"home"`, `"secrets"`, `"integrations"`, `"analytics"`); in config code, use
   `dashLinks(apex)` from `apps/dash/links.ts`. The origin is always this mind's Dash and the URL
   grants nothing.
+- `apps/design/` is the Design app, on `design.<zone>` for members: the component preview library
+  of `@ritvel/ui`, each component live with the code of its examples
+  ([packages/ui/README.md](packages/ui/README.md)).
 - `apps/docs/` is the Docs app, on `docs.<zone>` for members: the files of this mind's repos,
   written together in a browser ([docs-app.md](docs-app.md)).
 - `apps/meet/` is Meet, on `meet.<zone>`: start a meeting (`itx.config.startMeeting`), and any
