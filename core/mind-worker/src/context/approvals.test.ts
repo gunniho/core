@@ -10,6 +10,9 @@ test("what the gate answers the mind's own code is released when it has been rea
 
   expect(await approvals.rules()).toEqual({ locked: false, rules: [rule] });
   expect(gate.open()).toBe(0);
+  // what waits comes with its exact text, for a reader that hashes it
+  expect(await approvals.held()).toEqual([waits]);
+  expect(gate.open()).toBe(0);
   // an answer with facts: its facts are appended from the copy, and its session is let go
   expect(await approvals.setRules([rule])).toEqual([rule]);
   expect(gate.open()).toBe(0);
@@ -19,7 +22,7 @@ test("what the gate answers the mind's own code is released when it has been rea
     signAt: "https://iterate.example.com/secrets/approvals#proposed",
   });
   expect(gate.open()).toBe(0);
-  expect(gate).toMatchObject({ asked: 3, released: 3, appended: 2 });
+  expect(gate).toMatchObject({ asked: 4, released: 4, appended: 2 });
 });
 
 test("a proposed statement names the calling context as its asker and answers the page's link", async () => {
@@ -111,6 +114,7 @@ test.for([
 );
 
 const rule = ActRule.parse({ verb: "itx.whatsapp.sendMessage" });
+const waits = { digest: "d".repeat(64), text: "{}", at: 1, until: 2, waited: false };
 
 /** The boundary's calls of the gate, as Workers RPC answers them: each answer holds its call's
  *  session open until its disposer runs. */
@@ -131,6 +135,7 @@ function pretendGate() {
   return {
     egress: {
       actRules: async () => held({ locked: false, rules: [rule] }),
+      heldActs: async () => held([waits]),
       setActRules: async () => held({ rules: [rule], facts }),
       proposeActRule: async () => held({ id: "p1", facts }),
       proposeStatement: async () => held({ draft: "d0", signAt: "", expires: 0 }),

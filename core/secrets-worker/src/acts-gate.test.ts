@@ -17,6 +17,7 @@ import { ActsGate } from "./acts-gate.ts";
 
 const MEMBER = "key-member";
 const UNCHECKED = "key-member-unchecked";
+const DEVICE = "key-member-device";
 const MAIL = JSON.stringify({
   act: "email.send",
   from: "agent@example.com",
@@ -65,7 +66,7 @@ test("an act no rule names is free, and one a rule names waits from its first si
   expect((await gate.state()).held).toMatchObject([{ digest, state: "waiting", waited: false }]);
 });
 
-test("a member's approval lets a waiting caller go once: the act again is done", async () => {
+test("a member's approval lets a waiting caller that asks again go once: the act again is done", async () => {
   const { gate, decide } = vault();
   await gate.setRules({ rules: [{ verb: "itx.whatsapp.*" }], by: member });
   const { digest } = (await gate.act({ text: CALL })) as { digest: string };
@@ -73,13 +74,34 @@ test("a member's approval lets a waiting caller go once: the act again is done",
   await waiting(gate);
   expect((await gate.state()).held).toMatchObject([{ waited: true }]);
   const approved = await decide(MEMBER, { type: ACT_APPROVED, about: [digest] });
-  // its caller waits, so nobody else is asked to do it
+  // named for the mind too: the gate cannot tell a caller that waits from one that is gone
   expect(approved).toMatchObject({
-    result: { run: [] },
+    result: { run: [digest] },
     facts: [{ events: [{ type: ACT_APPROVED }] }],
   });
-  expect(await waited).toMatchObject({ state: "go", digest });
+  // the wait's own answer spends nothing: the caller that is there takes the act by asking again
+  expect(await waited).toMatchObject({ state: "approved", digest });
+  expect(await gate.act({ text: CALL })).toMatchObject({ state: "go", digest });
+  // so the mind, which reads the act a moment later, finds none to do
+  expect(await gate.approved(digest)).toBeNull();
   expect(await gate.act({ text: CALL, wait: true })).toMatchObject({ state: "done", digest });
+});
+
+test("an approval while a caller that is gone still waits is not spent: the mind does the act", async () => {
+  const { gate, decide } = vault();
+  await gate.setRules({ rules: [{ verb: "email.send" }], by: member });
+  const { digest } = (await gate.act({ text: MAIL, from: "/agents/a" })) as { digest: string };
+  // the caller's request ended, and its wait goes on in the gate: nobody reads this answer
+  const orphan = gate.act({ text: MAIL, wait: true });
+  await waiting(gate);
+  expect(await decide(MEMBER, { type: ACT_APPROVED, about: [digest] })).toMatchObject({
+    result: { run: [digest] },
+  });
+  expect(await orphan).toMatchObject({ state: "approved" });
+  expect(await gate.approved(digest)).toEqual({ digest, text: MAIL, from: "/agents/a" });
+  // the mind's send of it goes, once
+  expect(await gate.act({ text: MAIL })).toMatchObject({ state: "go", digest });
+  expect(await gate.approved(digest)).toBeNull();
 });
 
 test("an act approved after its caller stopped waiting is named for the mind to do, once", async () => {
@@ -142,6 +164,26 @@ test("a member's passkey that did not check its user approves nothing, rejects n
     await decide(UNCHECKED, { type: GATE_LOCKED }),
   ]).toMatchObject([refused, refused, refused]);
   expect(await gate.state()).toMatchObject({ locked: false, held: [{ state: "waiting" }] });
+});
+
+test("a member's device key approves and rejects what waits, and changes no rule and no lock", async () => {
+  const { gate, decide } = vault();
+  await gate.setRules({ rules: [{ verb: "email.send" }, { verb: "itx.whatsapp.*" }], by: member });
+  const mail = (await gate.act({ text: MAIL })) as { digest: string };
+  const call = (await gate.act({ text: CALL })) as { digest: string };
+  const passkeyOnly = { result: { error: expect.stringContaining("a passkey changes the rules") } };
+  expect([
+    await decide(DEVICE, { type: RULE_SET, payload: { rules: [] } }),
+    await decide(DEVICE, { type: GATE_LOCKED }),
+    await decide(DEVICE, { type: GATE_UNLOCKED }),
+  ]).toMatchObject([passkeyOnly, passkeyOnly, passkeyOnly]);
+  expect(await gate.state()).toMatchObject({ locked: false, rules: [{}, {}] });
+  expect(await decide(DEVICE, { type: ACT_APPROVED, about: [mail.digest] })).toMatchObject({
+    facts: [{ path: "/approvals", events: [{ type: ACT_APPROVED }] }],
+  });
+  expect(
+    await decide(DEVICE, { type: ACT_REJECTED, about: [call.digest], payload: { reason: "no" } }),
+  ).toMatchObject({ facts: [{ events: [{ type: ACT_REJECTED }] }] });
 });
 
 test("a rejection names its reason, and its caller hears who said no", async () => {
@@ -344,6 +386,7 @@ function vault() {
           member: envelope.signature.key.startsWith(MEMBER),
           // a passkey says whether it checked its user; this one did not
           ...(envelope.signature.key === UNCHECKED && { userVerified: false }),
+          ...(envelope.signature.key === DEVICE && { device: true }),
         },
         statement: JSON.parse(envelope.statement),
       }),

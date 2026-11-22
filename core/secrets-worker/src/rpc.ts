@@ -93,6 +93,21 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
     const { locked, rules } = await actsGate(this.env).state();
     return { locked, rules };
   }
+
+  // what waits alone: an approved act is past a decision
+  async heldActs() {
+    const { held } = await actsGate(this.env).state();
+    return held
+      .filter((row) => row.state === "waiting")
+      .map(({ digest, text, at, until, from, waited }) => ({
+        digest,
+        text,
+        at,
+        until,
+        from,
+        waited,
+      }));
+  }
 }
 
 // Only egress binds this entrypoint, so no caller's copy of `SECRET_USE_HEADER` reaches it.

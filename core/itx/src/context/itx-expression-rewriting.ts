@@ -1144,6 +1144,8 @@ export class ItxExpressionResolver {
       await record(answer.facts);
       answer = await gate.ask({ text, from, wait: true });
     }
+    // approved while this call waited: it is still here, so it takes the act (the gate's `approved`)
+    if (answer.state === "approved") answer = await gate.ask({ text, from });
     if (answer.state === "free") return undefined;
     if (answer.state === "go") return text;
     await record(answer.facts);

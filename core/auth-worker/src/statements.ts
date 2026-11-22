@@ -59,6 +59,9 @@ export async function admittedStatement(
   // at their own context alone
   const notThisPerson = personKeyRefusal(signer, statement.path);
   if (notThisPerson) return { refused: notThisPerson };
+  // a person's key with paths is a device's (./keys.ts): the vault's gate takes its statements
+  if (signer.principal.email && paths)
+    return refused("a device's key decides what waits for approval, and adds no events");
   // SOMEONE WHO IS NO MEMBER: an app's end user, a removed member, the holder of a passkey from
   // before its address was a member. An owner's block ends what they sign too (./blocked.ts), and
   // what they sign is small.

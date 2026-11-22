@@ -46,6 +46,17 @@ A rule makes an act wait until a member approves it with a passkey, on
   the member that it waits for them at the `signAt` that the call answers. The member sees it
   there beside the mail and calls that wait, and approves it with a key or rejects it. This is
   the one way: no link carries a rule's words.
+- An app on a member's own device can decide what waits with no passkey press. The device makes
+  a P-256 key and keeps it, in its secure hardware where it has one, and sends the member to
+  `https://<control-plane hostname>/keys/device?publicKey=<SubjectPublicKeyInfo, base64url>&label=<name>`.
+  The page shows the first characters of the key's id, which the app shows too, and a passkey
+  the member holds signs the key in. From then on the key signs as that member at `/approvals`
+  alone: a statement of `events.iterate.com/approval/act-approved` or `act-rejected` (with
+  `payload.reason`) that names the digests in `about`, posted as `{ statement, signature: {
+  format: "p256", key, sig } }` to `/secrets/approvals/statements`. It changes no rule and no
+  lock, and adds no key, no member and no event. `itx.approvals.held()` answers what waits with
+  its exact text: the app hashes `text` itself and shows it only when the SHA-256 is `digest`,
+  since the mind's code relays the answer.
 - To have a member vouch for one event, call
   `itx.approvals.proposeStatement({ path, type, payload })` and give the member the `signAt` link
   it answers. The page needs no sign-in and shows the exact event; one passkey press signs it,

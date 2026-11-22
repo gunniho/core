@@ -160,6 +160,10 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
     return this.env.SECRETS.actRules();
   }
 
+  async heldActs() {
+    return this.env.SECRETS.heldActs();
+  }
+
   async listSecrets() {
     return this.env.SECRETS.listSecrets();
   }
@@ -195,11 +199,14 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
     const act = await mailActOf(message);
     const broken = mailHeaderRefusal(act);
     if (broken) return { sent: false as const, error: broken };
-    const gate = await this.env.SECRETS.act({
+    let gate = await this.env.SECRETS.act({
       text: actText(act),
       from: options?.from,
       wait: options?.wait,
     });
+    // approved while this call waited: it is still here, so it takes the mail (the gate's `approved`)
+    if (gate.state === "approved")
+      gate = await this.env.SECRETS.act({ text: actText(act), from: options?.from });
     if (gate.state !== "free" && gate.state !== "go")
       return {
         sent: false as const,

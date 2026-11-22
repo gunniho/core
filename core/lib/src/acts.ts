@@ -325,12 +325,16 @@ export function rulesTighten(before: readonly ActRule[], after: readonly ActRule
  *  - `free`: no rule names it. Do it.
  *  - `held`: it waits from now. Record the facts, then ask again with `wait`.
  *  - `go`: a member approved it and the gate has marked it done: do it now, once.
+ *  - `approved`: a member approved it while this call waited. Ask again at once, with no `wait`:
+ *    that answers `go`. The gate cannot tell a caller that waits from one that is gone, so the
+ *    act is marked done only for a caller that is there to ask. For one that is gone the mind
+ *    does the act (`RUN_ACTS_HEADER`).
  *  - `rejected`: a member said no.
  *  - `waiting`: nobody answered within the wait. It stays approvable for a day.
  *  - `done`: it was done before. The same act is done once for one approval. */
 export type GateAnswer = (
   | { state: "free" }
-  | { state: "held" | "go" | "waiting" | "done"; digest: string }
+  | { state: "held" | "go" | "approved" | "waiting" | "done"; digest: string }
   | { state: "rejected"; digest: string; reason: string; by: string }
 ) & { facts: { path: string; events: { type: string; payload: Record<string, unknown> }[] }[] };
 
