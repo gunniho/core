@@ -120,8 +120,13 @@ export async function statementDraftsResponse(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== SIGN_STATEMENT_PATH) return null;
-  if (request.method === "GET" || request.method === "HEAD")
-    return draftPage(env, await openDraft(env, url.searchParams.get("draft")));
+  if (request.method === "GET" || request.method === "HEAD") {
+    const draft = await openDraft(env, url.searchParams.get("draft"));
+    // an app that shows the statement itself (the deploy's `apple.appIds`) asks for it as JSON
+    if (request.headers.get("accept")?.split(",")[0]?.trim() === "application/json")
+      return draftJson(env, draft);
+    return draftPage(env, draft);
+  }
   if (request.method === "POST") return pressed(env, request);
   return new Response("Not found", { status: 404 });
 }
@@ -133,6 +138,32 @@ async function openDraft(env: Env, id: unknown): Promise<Draft | null> {
   )
     .bind(id, Date.now())
     .first<Draft>();
+}
+
+/** THE DRAFT AS JSON, for an app that shows it and asks the passkey itself. It holds what the
+ *  page holds, and no more: the statement's parts, who signs, and who asked as the platform
+ *  recorded it. The link's id is the only key to it, as for the page. `payload` is the text that
+ *  the press is compared with. */
+function draftJson(env: Env, draft: Draft | null): Response {
+  if (!draft)
+    return Response.json(
+      { refused: "this link has ended", say: LINK_CLOSED },
+      { status: 404, headers: NO_STORE },
+    );
+  const by = AskedBy.safeParse(JSON.parse(draft.asked_by || "null"));
+  return Response.json(
+    {
+      id: draft.id,
+      mind: configOf(env).controlPlaneHostname,
+      path: draft.path,
+      type: draft.type,
+      payload: draft.payload,
+      ...(draft.signer_email && { signerEmail: draft.signer_email }),
+      askedBy: by.success ? by.data : { kind: "code" },
+      ...(draft.asked_from && { askedFrom: draft.asked_from }),
+    },
+    { headers: NO_STORE },
+  );
 }
 
 function draftPage(env: Env, draft: Draft | null): Response {

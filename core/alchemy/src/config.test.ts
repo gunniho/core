@@ -135,3 +135,10 @@ function config() {
     cloudflare: { accountId: "a".repeat(32), zones: ["example.com", "sub.example.net"] },
   };
 }
+
+void test("the owner's Apple apps are named as <team id>.<bundle id>, or not at all", () => {
+  const apps = (appIds: string[]) => MindConfig.safeParse({ ...config(), apple: { appIds } });
+  assert.equal(apps(["ABCDE12345.com.example.app"]).success, true);
+  for (const bad of [[], ["com.example.app"], ["abcde12345.com.example.app"], ["ABCDE12345."]])
+    assert.equal(apps(bad).success, false);
+});

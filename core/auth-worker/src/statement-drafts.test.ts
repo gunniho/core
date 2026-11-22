@@ -39,6 +39,37 @@ test("a proposed draft is shown on its page, every value as text", async () => {
   expect(html).not.toContain("<b>bold");
 });
 
+test("an app that shows the statement itself reads the draft as JSON: what the page holds, and a closed link is a 404 in words", async () => {
+  const { env } = await stack();
+  const { draft, signAt } = await proposed(env, { from: "/agents/onboarding", signerEmail: MEMBER });
+  const json = { headers: { accept: "application/json" } };
+  const answer = await statementDraftsResponse(env, new Request(signAt, json));
+  expect(answer).toMatchObject({ status: 200 });
+  expect(answer!.headers.get("cache-control")).toBe("no-store");
+  expect(await answer!.json()).toEqual({
+    id: draft,
+    mind: MIND,
+    path: "/minds/example.com",
+    type: TYPE,
+    payload: JSON.stringify(PAYLOAD),
+    signerEmail: MEMBER,
+    askedBy: { kind: "code" },
+    askedFrom: "/agents/onboarding",
+  });
+  // a browser's own accept, which only lists JSON later or not at all, still gets the page
+  const page = await statementDraftsResponse(
+    env,
+    new Request(signAt, { headers: { accept: "text/html,application/json" } }),
+  );
+  expect(page!.headers.get("content-type")).toContain("text/html");
+  const closed = await statementDraftsResponse(
+    env,
+    new Request(`${ISSUER}/statements/sign?draft=no-such-draft`, json),
+  );
+  expect(closed).toMatchObject({ status: 404 });
+  expect(await closed!.json()).toMatchObject({ refused: "this link has ended" });
+});
+
 test("a member's press lands the event with the member as its signer, and the draft is gone", async () => {
   const { env, passkeys } = await stack();
   const { draft } = await proposed(env, { next: "https://dash.example.com/" });

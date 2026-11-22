@@ -56,6 +56,8 @@ import { statementDraftsResponse } from "./statement-drafts.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
 
+const APPLE_ASSOCIATION_PATH = "/.well-known/apple-app-site-association";
+
 /** THE ANSWER, with core's page tag taken out of it where a person signs in, grants access,
  *  signs a statement or adds a key (./pages.ts `takesNoTag`): one rule by the request's path,
  *  whatever page builder made the answer, an error or a refusal too. */
@@ -88,6 +90,17 @@ async function answerOf(asked: Request, env: Env, ctx: ExecutionContext) {
     );
   if (pathname === "/.well-known/oauth-authorization-server" && request.method === "GET")
     return metadataResponse(env, request, ctx);
+  // APPLE'S ASSOCIATION FILE, for the apps that the deploy names (./config.ts `appleAppIds`):
+  // iOS reads it, through Apple's own cache, before it lets an app ask for a passkey of this
+  // hostname. It lists `webcredentials` alone. A mind with no such app has no file.
+  if (pathname === APPLE_ASSOCIATION_PATH && get) {
+    const apps = configOf(env).appleAppIds;
+    if (!apps.length) return new Response("Not found", { status: 404 });
+    return Response.json(
+      { webcredentials: { apps } },
+      { headers: { "cache-control": "public, max-age=3600" } },
+    );
+  }
   if (pathname === CLIENT_REGISTRATION_ENDPOINT && request.method === "POST") {
     const registered = await deviceRegistrationResponse(env, request, ctx);
     if (registered) return registered;

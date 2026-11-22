@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
 import { authResponse } from "./http.ts";
-import { sqliteStack } from "./test-support.ts";
+import { configVars, sqliteStack } from "./test-support.ts";
 
 const ISSUER = "https://iterate.example.com";
 
@@ -142,3 +142,15 @@ async function signInHtml(env: Env, path: string) {
 function asked(path: string, init: RequestInit = {}, env: Env = sqliteStack().env) {
   return authResponse(new Request(`${ISSUER}${path}`, init), env, {} as ExecutionContext);
 }
+
+test("Apple's association file lists the apps that the deploy names, for a passkey alone, and a mind with none has no file", async () => {
+  const at = "https://iterate.example.com/.well-known/apple-app-site-association";
+  const none = await authResponse(new Request(at), sqliteStack().env, {} as ExecutionContext);
+  expect(none).toMatchObject({ status: 404 });
+  const apps = ["ABCDE12345.com.example.app"];
+  const env = { ...sqliteStack().env, ...configVars({ appleAppIds: apps } as object) };
+  const answer = await authResponse(new Request(at), env, {} as ExecutionContext);
+  expect(answer).toMatchObject({ status: 200 });
+  expect(answer.headers.get("content-type")).toContain("application/json");
+  expect(await answer.json()).toEqual({ webcredentials: { apps } });
+});
