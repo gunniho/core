@@ -82,8 +82,8 @@ export type GateState = {
   /** What waits, or was approved and is not done yet. `waited`: a caller waits for it now. */
   held: (HeldAct & { waited: boolean })[];
 };
-/** `run`: the ids of acts a member approved whose caller stopped waiting. The mind does them now:
- *  `approved(id)` gives each one's text. */
+/** `run`: the ids of the acts a member approved. The mind does each that no waiting caller took:
+ *  `approved(id)` gives the text of one that is still to do. */
 export type GateDecision = { error?: string; run?: string[] };
 
 // As a secret's hold: a caller waits five minutes, and the act stays approvable for a day.
@@ -155,9 +155,11 @@ export class ActsGate extends DurableObject<Env> {
         }),
       };
     }
+    let waited = false;
     if (row.state === "waiting" && wait) {
       await this.#settled(digest, HOLD_MS);
       row = this.ctx.storage.kv.get<HeldAct>(key) ?? row;
+      waited = true;
     }
     if (row.state === "done") return { state: "done", digest, facts: [] };
     if (row.state === "rejected")
@@ -177,6 +179,11 @@ export class ActsGate extends DurableObject<Env> {
         facts: factsOf({ type: ACT_HOLD_EXPIRED, payload: { digest } }),
       };
     }
+    // APPROVED WHILE THIS CALL WAITED. The wait goes on here when its caller is gone (a request
+    // that ended, a connection that dropped), and an answer to nobody must not spend the
+    // approval. So this call marks nothing: a caller that is still there asks again and gets
+    // `go` below, and for one that is gone the mind does the act (`decide`, `run`).
+    if (waited) return { state: "approved", digest, facts: [] };
     // no await from the read above to this mark: one approval does the act once
     this.ctx.storage.kv.put<HeldAct>(key, { ...row, state: "done" });
     return { state: "go", digest, facts: [] };
@@ -375,10 +382,10 @@ export class ActsGate extends DurableObject<Env> {
         signer,
         ...(!approved && { reason: String(reason) }),
       });
-    // an act nobody waits for is done by the mind now: its caller reads the outcome later
-    const run = approved
-      ? held.filter((row) => !this.#waiting.get(row.digest)?.size).map((row) => row.digest)
-      : [];
+    // The mind does each approved act that no caller takes: the boundary reads it again after
+    // a moment (`approved`), and by then a caller that waited and is still there has asked again
+    // and marked it done. A wait says nothing of that: it outlives a caller that is gone.
+    const run = approved ? held.map((row) => row.digest) : [];
     for (const digest of digests) this.#wake(digest);
     return approved
       ? done(ACT_APPROVED, { digests }, { run })

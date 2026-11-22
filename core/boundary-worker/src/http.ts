@@ -22,6 +22,10 @@ import { mindHostResponse } from "./host-session.ts";
 import { identityIntakeAnswer } from "./identity-delivery.ts";
 import { confinedAnswer, httpsRedirect, stampedRequest } from "./stamp.ts";
 
+/** How long a caller that waited for an approval has to take its act before the mind does it. A
+ *  caller that is there asks the gate again within one call's time. */
+const APPROVED_ACT_GRACE_MS = 3000;
+
 /** The mind, as the boundary reaches it. */
 export type MindTransport = Pick<
   MindTarget,
@@ -149,10 +153,12 @@ export async function boundaryResponse(
     );
   if (route === "auth") return recordFacts(await env.AUTH.fetch(forwarded), true);
   if (route === "secrets") {
-    // an approval of an act whose caller stopped waiting: the mind does the act now
+    // An approved act that no caller takes: the mind does it. A caller that waited and is still
+    // there takes it at once (the gate's `approved`), so the act is read again after a moment.
     const { answer: answered, ran } = runApprovedActs(
       await env.SECRETS.fetch(forwarded),
       async (digest) => {
+        await new Promise((resolve) => setTimeout(resolve, APPROVED_ACT_GRACE_MS));
         const held = await env.SECRETS.approvedAct(digest);
         if (held) await mind.runAct(held);
       },
