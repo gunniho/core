@@ -2,7 +2,6 @@ import { expect, test, vi } from "vitest";
 import { requestWithOwnedBody } from "./request-body.ts";
 
 test("a request with no body is the same request", () => {
-  withIdentityStream();
   const get = new Request("https://example.com/", { method: "GET" });
   const emptyPost = new Request("https://example.com/", { method: "POST" });
   expect(requestWithOwnedBody(get, "test")).toBe(get);
@@ -10,7 +9,6 @@ test("a request with no body is the same request", () => {
 });
 
 test("the body, its method, URL and headers go on", async () => {
-  withIdentityStream();
   const request = new Request("https://example.com/statements", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -57,11 +55,6 @@ test("any other failure goes on as that error, so a cut upload never looks whole
     });
   }));
 
-// Node has no IdentityTransformStream: a TransformStream passes bytes through as it does.
-function withIdentityStream() {
-  vi.stubGlobal("IdentityTransformStream", TransformStream);
-}
-
 // the runtime's request body: its first part, then the error a read meets
 function bodyThatFails(message: string) {
   const encoder = new TextEncoder();
@@ -93,7 +86,6 @@ async function readAll(request: Request) {
 
 // no rejection that nobody handled, whatever the test reads
 async function watched(run: (info: ReturnType<typeof vi.spyOn>) => Promise<void>) {
-  withIdentityStream();
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
   const unhandled = vi.fn();
   process.on("unhandledRejection", unhandled);

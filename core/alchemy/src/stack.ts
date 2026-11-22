@@ -40,6 +40,7 @@ import { ArtifactsNamespace } from "./artifacts-namespace.ts";
 import { ArtifactsRepoSubscription } from "./artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
 import { type MindConfig, namesOf } from "./config.ts";
+import { bindAnalyticsSql } from "./analytics-sql-binding.ts";
 import { MindMadeTelemetryTables, telemetryTableNames } from "./mind-made-telemetry-tables.ts";
 import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
 import { type TelemetryMode, TelemetryToken } from "./telemetry-token.ts";
@@ -55,7 +56,9 @@ const ML_DSA = "webcrypto_modern_algorithms";
  *  whatever its props say, but plans an update for a change of them; the live minds' keys were
  *  made with these props written out. */
 const KEY = { bytes: 32 };
-/** Every log line and every span, kept in Cloudflare's own Workers Logs. */
+/** Every log line and every span, kept in Cloudflare's own Workers Logs. A stack's traces take
+ *  their share from its config (`telemetry.traceSampling`, ./config.ts); its log lines are kept
+ *  whole. */
 const KEEP_ALL = { enabled: true, headSamplingRate: 1, persist: true };
 /** What every Worker of the mind gets as its variable `ITERATE` (iterate/mind-config
  *  `MindConfig`): the same object for each, since they have the same trust level. */
@@ -83,6 +86,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     const { accountId, zones } = config.cloudflare;
     const mindIsInTheStack = config.topology === "full-cloudflare";
     const telemetryMode = options.telemetryMode || "given";
+    // the share of requests whose trace Cloudflare keeps: every one unless the config says less
+    const traces = { ...KEEP_ALL, headSamplingRate: config.telemetry?.traceSampling ?? 1 };
 
     // ── keys, generated once and kept in the stack's state: each is a secret of its Worker ──
     const atRestKey = yield* Alchemy.makeRandom("SecretsAtRestKey", KEY);
@@ -137,17 +142,15 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         tables: names.telemetryTables,
       });
     let telemetryTokenBindings:
-      | {
-          ITERATE__CATALOG_TOKEN: Output.Output<Redacted.Redacted<string>>;
-          ITERATE__ANALYTICS_TOKEN: Output.Output<Redacted.Redacted<string>>;
-        }
+      | { ITERATE__CATALOG_TOKEN: Output.Output<Redacted.Redacted<string>> }
       | undefined;
     if (telemetryMode !== "off") {
       let catalogTokenValue: Output.Output<Redacted.Redacted<string>>;
-      let analyticsTokenValue: Output.Output<Redacted.Redacted<string>>;
       if (telemetryMode === "minted") {
-        // Stack-managed catalog and analytics tokens keep existing sinks bound to the credentials
-        // they were created with; removing or replacing them stops catalog sink writes.
+        // The stack-managed catalog token keeps existing sinks bound to the credential they were
+        // created with; removing or replacing it stops catalog sink writes. (A stack minted an
+        // analytics token beside it until 22 Nov 2026; nothing reads it now, since `metrics` is
+        // read on the Analytics SQL binding, so a deploy deletes it.)
         const catalogToken = yield* Cloudflare.ApiToken.AccountApiToken("TelemetryCatalogToken", {
           name: `${names.telemetryBucket}-catalog`,
           policies: [
@@ -166,31 +169,16 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
             },
           ],
         });
-        const analyticsToken = yield* Cloudflare.ApiToken.AccountApiToken(
-          "TelemetryAnalyticsToken",
-          {
-            name: `${names.telemetryBucket}-analytics`,
-            policies: [
-              {
-                effect: "allow",
-                permissionGroups: ["Account Analytics Read"],
-                resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
-              },
-            ],
-          },
-        );
         catalogTokenValue = catalogToken.value;
-        analyticsTokenValue = analyticsToken.value;
       } else {
         // One API token of the account, created by the owner in Cloudflare's dashboard and kept in
         // Alchemy's state (./telemetry-token.ts). It holds Workers R2 Data Catalog Write, Workers R2
-        // Storage Bucket Item Write, Workers R2 SQL Read, and Account Analytics Read, and the
-        // telemetry Worker alone receives it.
+        // Storage Bucket Item Write and Workers R2 SQL Read, and the telemetry Worker alone
+        // receives it, for the catalog, the sinks and the tables' queries.
         const telemetryToken = yield* TelemetryToken("TelemetryToken", {
           name: names.telemetryBucket,
         });
         catalogTokenValue = telemetryToken.value;
-        analyticsTokenValue = telemetryToken.value;
       }
       const telemetryCatalog = yield* Cloudflare.R2.DataCatalog("TelemetryCatalog", {
         bucket: telemetryBucket,
@@ -228,10 +216,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           sql: Output.interpolate`INSERT INTO ${sink.name} SELECT * FROM ${stream.name}`,
         });
       }
-      telemetryTokenBindings = {
-        ITERATE__CATALOG_TOKEN: catalogTokenValue,
-        ITERATE__ANALYTICS_TOKEN: analyticsTokenValue,
-      };
+      telemetryTokenBindings = { ITERATE__CATALOG_TOKEN: catalogTokenValue };
     }
     const telemetryMetrics = yield* Cloudflare.AnalyticsEngine.Dataset("TELEMETRY_METRICS", {
       dataset: names.telemetryMetrics,
@@ -241,7 +226,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
       main: core("telemetry-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE },
       // never exported to itself: a failure to land would make more of what failed to land
-      observability: { ...KEEP_ALL, logs: { ...KEEP_ALL, invocationLogs: true }, traces: KEEP_ALL },
+      observability: { ...KEEP_ALL, logs: { ...KEEP_ALL, invocationLogs: true }, traces },
       // Cloudflare's export posts to this workers.dev address. The other Workers name the
       // export's destinations, so the intake cannot be behind one of them.
       workersDev: { enabled: true, previewsEnabled: false },
@@ -263,6 +248,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         METRICS: telemetryMetrics,
       },
     });
+    // `ANALYTICS`: Cloudflare's own datasets, read with no token and cut to the mind's rows
+    // (core/telemetry-worker/src/store-query.ts)
+    yield* bindAnalyticsSql(telemetry, "ANALYTICS");
     const telemetryDestination = (dataset: "logs" | "traces") =>
       Cloudflare.Workers.ObservabilityDestination(`Telemetry_${dataset}`, {
         name: `${names.telemetry}-${dataset}`,
@@ -290,7 +278,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           destinations: [logsDestination.slug],
         },
         traces: {
-          ...KEEP_ALL,
+          ...traces,
           destinations: [tracesDestination.slug],
         },
       },

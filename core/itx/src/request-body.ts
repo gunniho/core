@@ -9,12 +9,16 @@
 // So this invocation's own pipe reads the body, and the request that goes on carries the pipe's
 // other end. When the body is cut off because the answer was sent, the pipe ENDS the body that went
 // on: no Worker can read a body after its answer, so nobody can mistake the end for the whole
-// body, and the pump ends without an error. Any other failure, such as a client that went away
-// mid-upload, goes on as that error, so a cut upload never looks whole. Each is logged as info.
-// `new Request` refuses a body on GET or HEAD, which carry none.
+// body. Any other failure, such as a client that went away mid-upload, goes on as that error, so a
+// cut upload never looks whole. Each is logged as info.
+//
+// The pipe is a JS TransformStream, not an IdentityTransformStream: workerd cannot pipe the
+// readable of one native transform stream into another ("Inter-TransformStream
+// ReadableStream.pipeTo() is not implemented."), and the file route pipes an upload into a
+// FixedLengthStream for R2. `new Request` refuses a body on GET or HEAD, which carry none.
 export function requestWithOwnedBody(request: Request, where: string): Request {
   if (!request.body || request.method === "GET" || request.method === "HEAD") return request;
-  const { readable, writable } = new IdentityTransformStream();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   request.body.pipeTo(writable, { preventAbort: true }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     const afterAnswer = message === "Can't read from request stream after response has been sent.";
