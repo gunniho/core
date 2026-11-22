@@ -165,7 +165,10 @@ shows it, and deploys over it. The deploy starts from the whole config that the 
 with, which the stack keeps in the boundary Worker's variable `DEPLOY_CONFIG`, so every field
 stays, the sandboxes' image, the mail forward and the egress gateway among them. `--owner`,
 `--control-plane-hostname`, `--mail-forward-to` and `--egress-gateway` each replace what the mind
-has; `--mail-forward-to none` removes the forward, and `--egress-gateway none` the gateway. It
+has; `--mail-forward-to none` removes the forward, and `--egress-gateway none` the gateway.
+`--apple-apps <team id>.<bundle id>[,…]` names your own Apple apps that may ask for a passkey of
+the mind (the auth Worker lists them at `/.well-known/apple-app-site-association`; each is
+trusted as the sign page is), and `--apple-apps none` removes them. It
 asks first; `--yes` is the yes. No file of an earlier deploy is needed. A run over a mind with a
 sandbox image planned no changes and took 29 s (18 Nov 2026).
 

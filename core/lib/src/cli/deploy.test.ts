@@ -112,6 +112,12 @@ test("a new mind's config is the script's one input but for its id: the zone who
   expect(deployConfigOf({ ...answers, mailForwardTo: "team@group.example" })).toMatchObject({
     mail: { forwardTo: "team@group.example" },
   });
+  expect(deployConfigOf(answers).apple).toBeUndefined();
+  const appleApps = "ABCDE12345.com.example.app, ABCDE12345.com.example.other";
+  expect(deployConfigOf({ ...answers, appleApps }).apple).toEqual({
+    appIds: ["ABCDE12345.com.example.app", "ABCDE12345.com.example.other"],
+  });
+  expect(deployConfigOf({ ...answers, appleApps: "none" }).apple).toBeUndefined();
 });
 
 test("the control plane's hostname is the zone or one label under it, and nothing else", () => {
@@ -723,6 +729,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     },
     mail: { forwardTo: "team@group.example" },
     telemetry: { traceSampling: 0.25 },
+    apple: { appIds: ["ABCDE12345.com.example.app"] },
   });
   // every field of the script's config, nested ones too, is in this one: a new field fails here
   type Shape = Record<string, object>;
