@@ -330,6 +330,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
               ...sharedConfigOf(config),
               cloudflareAccessTeamDomain,
               cloudflareAccessAudienceTag,
+              // the owner's Apple apps that may ask for a passkey (./config.ts `apple`)
+              ...(config.apple && { appleAppIds: config.apple.appIds }),
             }),
           ),
         ),

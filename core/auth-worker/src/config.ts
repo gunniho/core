@@ -15,6 +15,10 @@ const ownFields = {
   /** The audience tag of the stack's one Access application, on the control plane's
    *  `/sign-in/access`: a token of the team for any other application proves nothing here. */
   cloudflareAccessAudienceTag: z.string().min(1),
+  /** The owner's Apple apps that may show the passkey sheet for the control-plane hostname, each
+   *  `<team id>.<bundle id>` (core/alchemy/src/config.ts `apple`). The deploy names them, never
+   *  the mind's code: an app listed here is trusted to show what a passkey signs. */
+  appleAppIds: z.array(z.string().min(1)).default([]),
 };
 
 /** The Worker's config out of its variables: `ITERATE`, with the two facts of Cloudflare Access

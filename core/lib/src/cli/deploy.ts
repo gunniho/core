@@ -83,6 +83,8 @@ export type DeployInput = {
   mailForwardTo?: string;
   /** the share of requests whose trace is kept, 0 to 1; `default` is every one (`deployConfigOf`) */
   traceSampling?: string;
+  /** the owner's Apple apps that ask for a passkey, with commas; `none` removes them */
+  appleApps?: string;
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
@@ -156,6 +158,7 @@ export function deployConfigOf(answers: {
   egressGateway?: string;
   mailForwardTo?: string;
   traceSampling?: string;
+  appleApps?: string;
   deployed?: DeployedMind;
 }) {
   const { deployed } = answers;
@@ -205,8 +208,11 @@ export function deployConfigOf(answers: {
     throw new Error(
       `--trace-sampling ${sampling} is no share: give a number from 0 to 1 (1 keeps every trace), or default.`,
     );
+  // the stack's own config refuses an app id that is not <team id>.<bundle id>
+  const appIds = answers.appleApps?.split(",").map((id) => id.trim());
   return {
     ...kept,
+    apple: answers.appleApps === "none" ? undefined : appIds ? { appIds } : kept?.apple,
     mail: forwardTo === "none" ? undefined : forwardTo ? { forwardTo } : kept?.mail,
     // the trace sampling is what the flag says, else what the mind has; `default` keeps every trace
     ...(sampling && {
@@ -2008,6 +2014,7 @@ export async function deployMind(input: DeployInput) {
       egressGateway: input.egressGateway,
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
+      appleApps: input.appleApps,
       deployed: mind,
     });
     const { controlPlaneHostname } = config;

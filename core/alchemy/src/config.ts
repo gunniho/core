@@ -64,6 +64,23 @@ export const MindConfig = z
      *  (https://developers.cloudflare.com/workers/observability/traces/). Log lines are always
      *  kept whole. Absent: 1, every trace. `iterate deploy --trace-sampling` sets it. */
     telemetry: z.strictObject({ traceSampling: z.number().min(0).max(1) }).optional(),
+    /** THE OWNER'S OWN APPLE APPS THAT ASK FOR A PASSKEY OF THE MIND, each as
+     *  `<team id>.<bundle id>`. The auth Worker lists them at
+     *  `/.well-known/apple-app-site-association` (`webcredentials`), so iOS lets each show the
+     *  passkey sheet for the control-plane hostname. **An app here is trusted as the sign page
+     *  is:** it shows the person what they sign, and a passkey signs whatever the app hands it.
+     *  Absent: no app, and a passkey is pressed on a page alone. */
+    apple: z
+      .strictObject({
+        appIds: z
+          .array(
+            z
+              .string()
+              .regex(/^[A-Z0-9]{10}\.[A-Za-z0-9][A-Za-z0-9.-]{0,154}$/, "<team id>.<bundle id>"),
+          )
+          .min(1),
+      })
+      .optional(),
   })
   // One label, because Cloudflare's certificate for a zone covers the zone and `*.<zone>` alone.
   .refine(

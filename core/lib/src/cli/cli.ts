@@ -259,6 +259,12 @@ const launcherProcedures = {
           .describe(
             "The share of requests whose trace Cloudflare keeps, from 0 to 1, for every Worker of the mind; default keeps every one (default: 1; for a mind that is there already: the one it has)",
           ),
+        appleApps: z
+          .string()
+          .optional()
+          .describe(
+            "Your own Apple apps that may ask for a passkey of the mind, each <team id>.<bundle id>, with commas between: the mind lists them in its Apple association file, and each is trusted as the sign page is, to show what a passkey signs; none removes them (default: none; for a mind that is there already: the ones it has)",
+          ),
         buy: z
           .boolean()
           .optional()
