@@ -12,10 +12,11 @@ import dashFiles from "../../configs/default/apps/dash/public/";
 import docsIndex from "../../configs/default/apps/docs/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import docsFiles from "../../configs/default/apps/docs/public/";
-import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
+import onboardingIndex from "../../repos/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
-import onboardingFiles from "../../configs/default/apps/onboarding/public/";
+import onboardingFiles from "../../repos/onboarding/public/";
 import Config from "../../configs/default/worker.ts";
+import { defaultConfigInstance, stubHtmlRewriter } from "./test-support/config-default-instance.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
@@ -37,13 +38,15 @@ test("the default config's pages and folders load here as the platform's loader 
     "call-facet.js",
     "share-links.js",
   ]);
+  // the onboarding page is the repo /repos/onboarding (core/repos/onboarding), loaded the same way
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
 });
 
 test("the homepage answers GET and HEAD of / alone: anything else that no case takes is not found, so a webhook nothing serves is not acknowledged", async () => {
-  // a bare instance, with a mind that says its name
-  const config = Object.create(Config.prototype, {
+  // an instance, with a mind that says its name; the homepage takes the page tag (page-events.md)
+  stubHtmlRewriter();
+  const config = defaultConfigInstance({
     getItx: {
       value: () => ({
         whoami: async () => ({ path: "/", mindSlug: "iterate.example.com" }),
@@ -60,6 +63,7 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   expect(homepageHtml).toContain("Homepage of mind iterate.example.com");
   expect(homepageHtml).toContain('href="https://onboarding.example.com/"');
   expect(homepageHtml).toContain('href="https://dash.example.com/"');
+  expect(homepageHtml).toMatch(/<script async fetchpriority="low" src="\/\.page\.js\?v=/);
   const status = async (url: string, method = "GET") =>
     (await config.fetch(new Request(url, { method }))).status;
   expect({
@@ -79,12 +83,12 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   });
 });
 
-test.for(["docs", "dash", "onboarding"])(
+test.for(["docs", "dash", "onboarding", "tasks"])(
   "the %s app says what it is and shows its icon to anyone, and nothing else before a sign-in",
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
     // a bare instance, with a guard that lets nobody in
-    const config = Object.create(Config.prototype, {
+    const config = defaultConfigInstance({
       auth: { value: { require: () => refusal } },
     }) as { fetch(request: Request): Promise<Response> };
     const ask = (path: string) => config.fetch(new Request(`https://${host}.example.com${path}`));
@@ -119,12 +123,15 @@ test.for(["docs", "dash", "onboarding"])(
 test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
-  const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["docs", "dash", "meet", "onboarding"]);
+  const mounted = [...worker.matchAll(/^ +case "([a-z]+)":/gm)].map(([, host]) => host);
+  expect(mounted).toEqual(["dash", "docs", "mcp", "meet", "onboarding", "tasks"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );
-  expect(linked.toSorted()).toEqual(mounted.filter((host) => host !== "dash").toSorted());
+  // dash is this app itself; mcp is the MCP protocol endpoint, not a browser app
+  expect(linked.toSorted()).toEqual(
+    mounted.filter((host) => host !== "dash" && host !== "mcp").toSorted(),
+  );
 });
 
 const ORIGIN =

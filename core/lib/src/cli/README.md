@@ -99,7 +99,7 @@ What it does, in order:
    record and Workers route of that domain, right before the deploy and after every other check.
 4. **Telemetry: no token.** The deploy makes the telemetry bucket and its streams, and no tables
    (`events`, `logs`, `spans`, and `metrics` SQL). The mind turns them on itself: ask its agent to
-   turn on telemetry (`onboarding/telemetry.md`). It asks a member for a token of the account and
+   turn on telemetry (`onboarding/telemetry.md` of `/repos/onboarding`). It asks a member for a token of the account and
    makes the tables with it; no second deploy is needed. A mind whose tables an earlier deploy
    made with a token keeps that token in the stack's state.
 5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
@@ -128,6 +128,9 @@ What it does, in order:
      forwarded as it arrived ([core/alchemy](../../../alchemy/README.md#the-one-input)). The
      address must be a verified destination address of the account's Email Routing, which a
      person adds in the dashboard; while it is not, every mail to the mind fails for its sender.
+     A stack with a forward address records every mail on the log before the forward, whatever
+     the config's `email` hook does: the forward must not go twice, and a refused forward must
+     not cost the mail its place on the log.
    - `cloudflare.egressGatewayWorker`: absent, unless `--egress-gateway <Worker name>` names a
      Worker of the account that carries what a mind's `itx.fetch` sends out of the stack, each
      request with its secret in ([core/alchemy](../../../alchemy/README.md) says what does not
@@ -141,6 +144,11 @@ What it does, in order:
    sign in. In a checkout of the source it deploys that checkout.
    `--source <folder>` names a checkout, `--ref <branch or commit>` another version. It needs git.
    A source from before the one Alchemy script is refused, before anything changes.
+   When the source holds `core/repos/onboarding`, the command builds the mind Worker with
+   `ITERATE_SEED_REPOS` naming it, and one line says that a new mind starts with
+   `/repos/onboarding`: the onboarding page, its agent's guides and the cards of the Tasks board.
+   A new mind commits that folder as the repo's first commit at its birth, after its config. A
+   mind that has the repo already keeps it as it is.
 8. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
    store request failed"): the command then deploys once more by itself. So it does, a minute

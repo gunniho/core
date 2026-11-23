@@ -1,7 +1,7 @@
 // steps.ts — THE LIST OF ONBOARDING STEPS, and the four ways in to them: `runStep` (a button's
 // press, and the same as the agent's tool `itx.config.onboardingStep(step, action)`),
-// `onboardingCards` (what the page draws), `onboardingEvent` (the hook in worker.ts, for the
-// events of the mind that change a step) and `onboardingMindEvent` (worker.ts `processMindEvent`,
+// `onboardingCards` (what the page draws), `onboardingEvent` (the hook in every-event.ts, for the
+// events of the mind that change a step) and `onboardingMindEvent` (deliveries.ts `otherMindEvent`,
 // for iterate.iterate.com's enrolment events). A step is one module of steps/ with
 // `{ id, actions, offered, words, check, act, hears, onEvent }`; a new step is one more entry in
 // `STEPS`. Every step writes the four events of contract.ts on `/apps/onboarding`.
@@ -181,6 +181,12 @@ async function readState(itx: Pick<OnboardingItx, "cd">): Promise<OnboardingStat
  *  rule lands, and cloud-handover.ts `iterateLetInEvent` writes none. */
 export async function connectWaitsForRule(itx: Pick<OnboardingItx, "cd">): Promise<boolean> {
   return (await readState(itx)).steps["connect-iterate-cloud"]?.action?.name === "connect";
+}
+
+/** Whether the owner said "not now" to the step "Connect to iterate Cloud", and has not pressed
+ *  Connect since. */
+export async function connectDeclined(itx: Pick<OnboardingItx, "cd">): Promise<boolean> {
+  return (await readState(itx)).steps["connect-iterate-cloud"]?.declined === true;
 }
 
 /** One keyed append: a key already taken is the same write landed before. */
@@ -375,14 +381,14 @@ export async function onboardingCards(context: StepContext): Promise<Card[]> {
   return cards;
 }
 
-/** THE HOOK (worker.ts, beside the others): an event of the mind that a step hears. Any other
+/** THE HOOK (every-event.ts, beside the others): an event of the mind that a step hears. Any other
  *  event returns before anything is read. */
 export async function onboardingEvent(itx: OnboardingItx, event: MindEvent) {
   if (!STEPS.some((step) => step.hears(event))) return;
   await stepEvent(await stepContext(itx), event);
 }
 
-/** THE HOOK FOR ANOTHER MIND'S EVENT (worker.ts `processMindEvent`): an event on
+/** THE HOOK FOR ANOTHER MIND'S EVENT (deliveries.ts `otherMindEvent`): an event on
  *  `/cloud` of iterate's context (`enrolmentOf`) that the mind iterate.iterate.com signed. Any other returns before anything
  *  is read. It never throws: a failure is one log line, and the card keeps its state. */
 export async function onboardingMindEvent(itx: OnboardingItx, event: MindEvent) {

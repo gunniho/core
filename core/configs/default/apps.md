@@ -3,7 +3,7 @@
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
 packages, the call on an agent, Meet and voice devices: `apps/`, `apps/theme.css`,
 `apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`,
-`apps/onboarding/`, `call.ts`, `apps/meet/` and `integrations` in `worker.ts`.
+`apps/onboarding/`, `call.ts`, `apps/meet/` and `integrations` in `integrations.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
 own.
@@ -16,10 +16,11 @@ apps/<name>/
   app.ts       exports a function that makes an object with `fetch`
 ```
 
-- **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`:
+- **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`
+  (its `switch`):
   `case "notes": return this.auth.require(request) || notes.fetch(request, this);`. A changed
-  `worker.ts` keeps `installAgents(itx)`, `publishAgentKinds(itx, agentKinds)` and the onboarding
-  agent's `itx.agents.create` in the init case.
+  `worker.ts` keeps `await init(itx)` in the init case: `init.ts` runs `installAgents(itx)` and
+  `publishAgentKinds(itx, agentKinds)`.
 - **No build.** A module imports a file that is not code and gets its text, or its bytes when it is
   not text (`import index from "./index.html"`). An import that ends in `/` is every file under
   that folder, by path (`import files from "./public/"`). `serveFiles(request, { index, files })`
@@ -75,6 +76,15 @@ apps/<name>/
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
   (`memberItx()` of `@iterate-com/ui/live`, in `apps/dash/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
+- **An MCP server of your own that runs scripts as the member.** `apps/mcp/` mounts the mind's own
+  MCP server on `mcp.<zone>/mcp` in `worker.ts`, with its `initialize` instructions and `run`
+  description in `apps/mcp/app.ts` (change them there, or pass your own to `mcpApp(...)`). Any
+  other app may serve MCP too (`apps/guestbook/mcp.ts` shows the protocol and the sign-in). It hands
+  a member's `tools/call` of `run` to the platform with `host.auth.mcpRun(request, message)`: the
+  platform runs the script as the member the request was stamped with, as at the mind's own `/mcp`,
+  never with the worker's reach. The run's own record (`itx/run-requested` on `/`) shows the member
+  as `source.principal` and the host as `source.via.appPage`; what the script appends shows them as
+  `source.onBehalfOf.principal` and `source.onBehalfOf.via.appPage`.
 - **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
   signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the
   facet then appends shows them as `source.onBehalfOf`: `principal`, `grant`, `via` when they
@@ -190,12 +200,13 @@ pins.
 
 ## Integration packages
 
-`integrations` in `worker.ts` lists the integration packages this mind hosts (`Integration` from
+`integrations` in `integrations.ts` lists the integration packages this mind hosts (`Integration` from
 `iterate/sdk`: a Telegram bot, your own GitHub App, and more, one folder each in
 https://github.com/jonastemplestein/iterategrations, whose recipes add one). Each is one element,
 from its package (`telegram()`, `github()`). A package that serves pages gets a case of its own
-in `fetch`, on its hostname's first label (`case "telegram": return telegram.fetch(request,
-this)`), and `processEvent` hands every package every event after the mind's own cases:
+in `worker.ts`'s `fetch`, on its hostname's first label (`case "telegram": return
+telegram.fetch(request, this)`), and `processEvent` hands every package every event after the
+mind's own cases (`every-event.ts`):
 a package's install hook is its `mind/worker-updated` case, where it registers its card on
 `/integrations` for the Dash's Integrations page (`iterate/integrations`; writing a package of
 your own: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md). A hook returns for an
@@ -208,10 +219,16 @@ Dash shows what it registered and links to its page.
 ## Onboarding
 
 `apps/onboarding/` is a centered, no-AI setup wizard that gets a new owner from a fresh deploy into
-their Dash chat with `/agents/onboarding`:
+their Dash chat with `/agents/onboarding`. This repo keeps its routes and its steps; the page
+(`index.html`, `public/`), the agent's guides and the cards of the Tasks board are the repo
+`/repos/onboarding`, which a new mind starts with. Every request on `onboarding.<zone>` that the
+app does not answer goes to the worker of that repo at its newest commit (`pageFromRepo` in
+`apps/onboarding/app.ts`). Delete that repo to retire the page: the host then answers 404.
 
 1. **Connect to iterate Cloud (optional):** the owner signs the meld rule with a passkey and takes
    iterate's credit for OpenAI and Exa by iterate's proxy, or skips (`steps/connect-iterate-cloud.ts`).
+   Connected, `itx.ai` also runs through iterate Cloud once the Cloud recognises the mind
+   (`cloud-ai.ts`); `await itx.iterateCloud.usage()` reads that spend.
 2. **Configure AI:** ready to continue if iterate Cloud credit is connected; otherwise the owner
    adds an OpenAI API key (`itx.secrets.collectFromUser`), connects a ChatGPT Plus/Pro plan
    (`npx iterate@latest chatgpt connect <mind>`), or uses Cloudflare AI Gateway credit.
@@ -237,8 +254,12 @@ It is off in a new mind. To turn it on, make this commit:
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "<a build of npm's main tag, pinned>" }
 voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
-worker.ts      take the "// " off the import of installVoice, and off installVoice(itx) in the init case
+worker.ts      add the import beside the others, and the step after `await init(itx)` in the init case:
+                 import { installVoice } from "@iterate-com/voice/install";
+                 await step("voice", () => installVoice(itx));
 ```
+
+The step makes the service at `itx.voice`.
 
 To upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the device calls
 in progress.

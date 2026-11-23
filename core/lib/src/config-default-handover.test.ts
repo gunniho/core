@@ -74,30 +74,28 @@ test("the handover writes the first message and starts the first subagents, once
     payload: { message: greeting },
   });
   expect(rows.slice(3).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
-    ["/agents/onboarding/research", "onboarding:helper:research", "user"],
-    ["/agents/onboarding/website", "onboarding:helper:website", "user"],
+    ["/agents/onboarding/researcher", "onboarding:helper:researcher", "user"],
     ["/agents/onboarding/sandbox", "onboarding:helper:sandbox", "user"],
     ["/agents/onboarding", "onboarding:helpers-started", "developer"],
   ]);
-  // a subagent's brief starts its turn, and names its file and the way to report
+  // a subagent's brief starts its turn, and names its guide and its card in /repos/onboarding, how
+  // to read them, and the way to report
   expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
   expect(rows[3]!.payload).toMatchObject({
     content: expect.stringMatching(
-      /Read onboarding\/research\.md[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
+      /Read onboarding\/research\.md of \/repos\/onboarding \(await itx\.repos\.get\("\/repos\/onboarding"\)\.readFile\("onboarding\/research\.md"\)\)[\s\S]*tasks\/onboarding-research\.md of \/repos\/onboarding[\s\S]*profile\/icon\.svg[\s\S]*\/agents\/onboarding\/website[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
     ),
   });
-  expect(rows[6]!.payload).toMatchObject({
+  expect(rows[5]!.payload).toMatchObject({
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
   expect(root).toMatchObject({
     created: [
       "/agents/onboarding",
-      "/agents/onboarding/research",
-      "/agents/onboarding/website",
+      "/agents/onboarding/researcher",
       "/agents/onboarding/sandbox",
       "/agents/onboarding",
-      "/agents/onboarding/research",
-      "/agents/onboarding/website",
+      "/agents/onboarding/researcher",
       "/agents/onboarding/sandbox",
     ],
   });
@@ -112,8 +110,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
   expect(keys).toEqual([
     "opener:/agents/onboarding",
     "",
-    "onboarding:helper:research",
-    "onboarding:helper:website",
+    "onboarding:helper:researcher",
     "onboarding:helper:sandbox",
     "onboarding:helpers-started",
   ]);
@@ -121,7 +118,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
     event: {
       payload: {
         content:
-          "The mind's code has started the subagents research, website and sandbox under your path. Do not start them again.",
+          "The mind's code has started the subagents researcher and sandbox under your path (researcher will look the owner up, generate a starter logo, pass its findings to /agents/onboarding/website, and report back after). Do not start them again.",
       },
     },
   });
@@ -129,79 +126,16 @@ test("an owner who reached the chat before the handover is greeted once: the ope
 
 const KEY = "cloud-handover:h4sh-of_the-handover";
 
-/** What the Dash appends when someone first opens the empty onboarding chat
- *  (packages/ui dash-agents.tsx), as `processEvent` is handed it. */
-const OPENER = {
-  type: "events.iterate.com/agent/context-added",
-  path: "/agents/onboarding",
-  offset: 1,
-  idempotencyKey: "opener:/agents/onboarding",
-  source: {},
-  payload: { role: "developer", content: "The owner has just opened this chat." },
-};
-
-test("with no handover, the owner's first opening of the chat starts the first subagents in the background, once", async () => {
+test("an agent/context-added opener alone does not trigger onboarding subagents (the onboarding app launches them on verified AI)", async () => {
   const root = rootOf("https://example.com/");
-  await run(root, OPENER);
-  await run(root, OPENER);
-  expect(root.appended.map(({ path, event }) => [path, event.idempotencyKey])).toEqual([
-    ["/agents/onboarding/research", "onboarding:helper:research"],
-    ["/agents/onboarding/website", "onboarding:helper:website"],
-    ["/agents/onboarding/sandbox", "onboarding:helper:sandbox"],
-    ["/agents/onboarding", "onboarding:helpers-started"],
-  ]);
-  // the website's brief starts its turn, names its file, and says where the owner's words are
-  expect(root.appended[1]!.event).toMatchObject({
-    payload: {
-      role: "user",
-      content: expect.stringMatching(
-        /Read onboarding\/website\.md[\s\S]*no sign-up record[\s\S]*\/agents\/onboarding/,
-      ),
-    },
+  await run(root, {
+    type: "events.iterate.com/agent/context-added",
+    path: "/agents/onboarding",
+    offset: 1,
+    idempotencyKey: "opener:/agents/onboarding",
+    source: {},
+    payload: { role: "developer", content: "The owner has just opened this chat." },
   });
-  expect(root.appended[1]!.event).not.toHaveProperty("payload.llmRequestPolicy");
-  expect(root.appended.at(-1)).toMatchObject({
-    event: {
-      payload: {
-        content:
-          "The mind's code has started the subagents research, website and sandbox under your path. Do not start them again.",
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
-      },
-    },
-  });
-});
-
-test("a handover after the opener starts no subagent twice", async () => {
-  const root = rootOf("https://example.com/");
-  await run(root, OPENER);
-  await root.cd("/agents/onboarding").append({ idempotencyKey: "opener:/agents/onboarding" });
-  await run(root, HANDOVER);
-  const keys = root.appended.map(({ event }) => event.idempotencyKey);
-  expect(keys.filter((key) => key.startsWith("onboarding:"))).toEqual([
-    "onboarding:helper:research",
-    "onboarding:helper:website",
-    "onboarding:helper:sandbox",
-    "onboarding:helpers-started",
-  ]);
-});
-
-test.for([
-  {
-    name: "another agent's opener",
-    event: { ...OPENER, path: "/agents/other", idempotencyKey: "opener:/agents/other" },
-  },
-  {
-    name: "the handover's greeting (an assistant's item under the opener's key)",
-    event: { ...OPENER, payload: { role: "assistant", content: "Hey." } },
-  },
-  {
-    name: "another item on the onboarding agent",
-    event: { ...OPENER, idempotencyKey: "something-else" },
-  },
-  { name: "an item with no key", event: { ...OPENER, idempotencyKey: undefined } },
-])("$name starts no subagent", async ({ event }) => {
-  const root = rootOf("https://example.com/");
-  await run(root, event);
   expect([root.appended, root.created]).toEqual([[], []]);
 });
 

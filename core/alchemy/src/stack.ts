@@ -240,6 +240,16 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           workerNamesThatQueriesReadWhole: mindIsInTheStack
             ? [names.mind, names.boundary]
             : [names.boundary],
+          // Every Worker of the stack: the mind reads the log lines of them all, so its crash job
+          // sees a crash of any (core/configs/default/apps/telemetry/crashes.ts). Their spans
+          // stay out: a span of the vault's outbound fetch can hold what the vault put in.
+          workerNamesWhoseLogsQueriesRead: [
+            ...(mindIsInTheStack ? [names.mind] : []),
+            names.boundary,
+            names.auth,
+            names.secrets,
+            names.telemetry,
+          ],
           eventsWriterName: mindIsInTheStack ? names.mind : "external-mind",
         }),
         ITERATE__OTLP_SECRET: otlpSecret,
@@ -292,10 +302,12 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // its own domain, and then signs a token that names the address. The auth Worker checks the
     // token itself (core/auth-worker/src/access-sign-in.ts). The policy names the owners alone:
     // nobody else gets a code, so no other person ever takes a seat of the account's team.
+    // Its name is the control plane's hostname: Cloudflare's code page says "Log in to <name>"
+    // to the owner. A new name changes the application in place, and its `aud` stays.
     const accessTeam = yield* AccessTeam("AccessTeam");
     const ownerEmailProof = yield* Cloudflare.Access.Application("OwnerEmailProof", {
       type: "self_hosted",
-      name: names.ownerEmailProof,
+      name: config.controlPlaneHostname,
       domain: `${config.controlPlaneHostname}/sign-in/access`,
       // the token's cookie goes to that path alone, and to no other page of the control plane
       pathCookieAttribute: true,

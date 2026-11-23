@@ -100,6 +100,8 @@ type Declared = {
   resources: Record<string, string>;
   texts: Record<string, Record<string, string>>;
   observability: Record<string, any>;
+  /** each Access application's name, by its logical id */
+  accessNames: Record<string, string>;
 };
 
 /** Each Worker's bindings and declared resources, as the program declares them for one config. */
@@ -151,7 +153,12 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
     const resources = Object.fromEntries(
       Object.values(stack.resources).map((r) => [r.LogicalId, r.Type as string]),
     );
-    return { workers, resources, texts, observability };
+    const accessNames = Object.fromEntries(
+      Object.values(stack.resources)
+        .filter((r) => r.Type === "Cloudflare.Access.Application")
+        .map((r) => [r.LogicalId, r.Props.name]),
+    );
+    return { workers, resources, texts, observability, accessNames };
   });
 
 void test("each Worker of the stack holds what stack-bindings.snapshot.json says", async () => {
@@ -184,6 +191,15 @@ void test("each Worker of the stack holds what stack-bindings.snapshot.json says
 const declared = (config: object) =>
   Effect.runPromise(declaredOf(MindConfig.parse(config)) as Effect.Effect<Declared>);
 
+// Cloudflare's code page says "Log in to <the application's name>" to an owner with no passkey
+void test("the one Access application is named by the control plane's hostname", async () => {
+  const { accessNames } = await declared({
+    ...CASES["full-cloudflare, no mail forward"],
+    controlPlaneHostname: "iterate.example.com",
+  });
+  assert.deepEqual(accessNames, { OwnerEmailProof: "iterate.example.com" });
+});
+
 // A STACK THAT NAMES NO GATEWAY IS AS IT WAS BEFORE THE GATEWAY'S FIELD EXISTED. Its config
 // variables are written out here character by character: a marker or a new key there would
 // change every mind. Its bindings are read from the declaration and never from the snapshot
@@ -210,6 +226,29 @@ void test("a stack that names no egress gateway binds none, and has the same ITE
         `{"mindId":"${id}","controlPlaneHostname":"example.com","zones":["example.com"],"ownerEmails":["owner@owner.example"],"topology":"${topology}"}`,
         `${name} / ${worker}`,
       );
+    // A QUERY READS THE LOG LINES OF EVERY WORKER OF THE STACK, so the crash job sees a crash of
+    // any: the mind (when it is in the stack), the boundary, auth, secrets and telemetry, and no
+    // other Worker. THE SPANS STAY the mind's and the boundary's: the vault's can hold a value.
+    const telemetryConfig = JSON.parse(texts.Telemetry!.ITERATE!) as Record<string, unknown>;
+    assert.deepEqual(
+      telemetryConfig.workerNamesThatQueriesReadWhole,
+      [
+        ...(topology === external ? [] : ["iterate-example-com-mind"]),
+        "iterate-example-com-boundary",
+      ],
+      name,
+    );
+    assert.deepEqual(
+      telemetryConfig.workerNamesWhoseLogsQueriesRead,
+      [
+        ...(topology === external ? [] : ["iterate-example-com-mind"]),
+        "iterate-example-com-boundary",
+        "iterate-example-com-auth",
+        "iterate-example-com-secrets",
+        "iterate-example-com-telemetry",
+      ],
+      name,
+    );
     assert.equal(
       texts.Boundary!.DEPLOY_CONFIG,
       `{"mindId":"${id}","controlPlaneHostname":"example.com","ownerEmails":["owner@owner.example"],"topology":"${topology}","alchemy":{"stageName":"example-com"},"cloudflare":{"accountId":"${accountId}","zones":["example.com"]}${mail}}`,

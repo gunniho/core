@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Onboarding</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <!-- iterate's components, pinned to one build. To upgrade, change the version here. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@iterate-com/ui/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/",
+          "react": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/react",
+          "react/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/react/",
+          "react-dom": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/react-dom",
+          "react-dom/": "https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/react-dom/",
+          "@ui-sdk/react/": "https://esm.iterate.com/*@ui-sdk/react@0.1.0-beta.13/",
+          "@ui-sdk/core": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13",
+          "@ui-sdk/core/": "https://esm.iterate.com/@ui-sdk/core@0.1.0-beta.13/",
+          "@ritvel/ui/": "/ui/",
+          "lucide-react": "https://esm.iterate.com/lucide-react@1.48.0?external=react,react-dom"
+        }
+      }
+    </script>
+    <!-- The page's session, fetched while modules load so app.js reads the mind's address at once. -->
+    <script>
+      window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
+    </script>
+    <!-- @ritvel/ui's look (packages/ui). It stands before the kit's sheet because its first line
+         fixes the order of the page's cascade layers, and the first sheet to name them decides. -->
+    <link rel="stylesheet" href="/ui/ui.css" />
+    <link
+      rel="stylesheet"
+      href="https://esm.iterate.com/@iterate-com/ui@0.1.0-main.20261123T152429Z-b919c29/styles.css"
+    />
+    <!-- The look of this mind's apps: apps/theme.css of /repos/config, shared across every app. -->
+    <link rel="stylesheet" href="/theme.css" />
+    <script>
+      if (getComputedStyle(document.documentElement).colorScheme === "dark")
+        document.documentElement.classList.add("dark");
+    </script>
+    <link rel="stylesheet" href="/app.css" />
+    <script type="module" src="/live-reload.js" blocking="render"></script>
+  </head>
+  <body>
+    <div id="root">
+      <main class="wizard-page">
+        <p class="text-sm text-muted-foreground">Connecting…</p>
+      </main>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

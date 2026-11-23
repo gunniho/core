@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import { DEPLOY_SCOPES, RECOVER_SCOPES, scopesLacking, STACK_SCOPES } from "./cloudflare-access.ts";
 import {
+  assertSupportedNodeVersion,
   boundaryCheck,
   boundaryRead,
   BOUNDARY_WAIT_MS,
@@ -29,7 +30,9 @@ import {
   isInteractiveEnv,
   mindConfigIn,
   onboardingUrlOf,
+  parseExtraOwnerEmails,
   planArgsOf,
+  setupDestinationOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   pnpmEnvFor,
@@ -38,6 +41,7 @@ import {
   ONE_MORE_TRY,
   saysTheConsumerIsNotSeenYet,
   saysTheStateStoreRefused,
+  seedReposEnvOf,
   stateStoreAddress,
   STORE_WAIT_MS,
   waitForStore,
@@ -272,7 +276,7 @@ test("the key's line names the key file only when it is here, and only when this
     { gaveTheId: false, posted: { ...quiet, emptyBefore: true } },
   ])
     expect(identityKeyLineOf(keyFile, run)).toBe(
-      `Its identity key: ${keyFile}  (keep a copy: it proves that the mind is yours)`,
+      `Its identity key: ${keyFile}  (not used right now — don't worry about it or if you lose it)`,
     );
   // a later deploy of a mind whose log has its records, or whose post failed, prints none
   expect(identityKeyLineOf(keyFile, { gaveTheId: false, posted: quiet })).toBeUndefined();
@@ -635,6 +639,28 @@ test("createDeployProgress names what Alchemy is still making, for a line in a q
 
 test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
   expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
+  expect(
+    setupDestinationOf({
+      controlPlaneHostname: "iterate.ada-labs.com",
+      zone: "ada-labs.com",
+      ownerEmails: ["ada@example.org"],
+      firstDeploy: true,
+    }),
+  ).toEqual({
+    url: "https://iterate.ada-labs.com/sign-in/access",
+    prompt: "Continue setup in your browser (sign in with ada@example.org):",
+  });
+  expect(
+    setupDestinationOf({
+      controlPlaneHostname: "iterate.ada-labs.com",
+      zone: "ada-labs.com",
+      ownerEmails: ["ada@example.org"],
+      firstDeploy: false,
+    }),
+  ).toEqual({
+    url: "https://onboarding.ada-labs.com/",
+    prompt: "Continue setup in your browser (sign in with ada@example.org):",
+  });
   expect(isInteractiveEnv({}, true)).toBe(true);
   expect(isInteractiveEnv({ CI: "1" }, true)).toBe(false);
   expect(isInteractiveEnv({ CI: "true" }, true)).toBe(false);
@@ -1230,30 +1256,58 @@ test("unfinishedDeployIn matches only a marker for the same account, stage, doma
   expect(source).toContain("deployed && !resuming?.firstDeploy");
 });
 
-test("the deploy opens no page until the pages a browser asks first work: the sign-in page, the apex, onboarding.<zone> and, for a new mind, the first owner's way through Cloudflare Access", async () => {
+test("the deploy opens no page until the pages a browser asks first work: iterate.<domain>, the apex, onboarding.<zone>, dash.<zone> and, for a new mind, the app description and Cloudflare Access", async () => {
   const mind = { controlPlaneHostname: "iterate.ada-labs.com", zone: "ada-labs.com" };
+  const CONTROL_PLANE = "https://iterate.ada-labs.com/";
   const SIGN_IN = "https://iterate.ada-labs.com/sign-in";
+  const OAUTH_META = "https://iterate.ada-labs.com/.well-known/oauth-authorization-server";
   const APEX = "https://ada-labs.com/";
   const ONBOARDING = "https://onboarding.ada-labs.com/";
+  const DASH = "https://dash.ada-labs.com/";
+  const ONBOARDING_APP = "https://onboarding.ada-labs.com/.well-known/iterate-app";
   const ACCESS = "https://iterate.ada-labs.com/sign-in/access";
   const pages = firstPagesOf({ ...mind, firstDeploy: true });
-  expect(pages.map((page) => page.address)).toEqual([SIGN_IN, APEX, ONBOARDING, ACCESS]);
+  expect(pages.map((page) => page.address)).toEqual([
+    CONTROL_PLANE,
+    SIGN_IN,
+    OAUTH_META,
+    APEX,
+    ONBOARDING,
+    DASH,
+    ONBOARDING_APP,
+    ACCESS,
+  ]);
   // a deploy over a mind asks no first owner's way, and takes the mind's own 404 for an app
   // that its owner removed
   const over = firstPagesOf({ ...mind, firstDeploy: false });
-  expect(over.map((page) => page.address)).toEqual([SIGN_IN, APEX, ONBOARDING]);
-  expect(over[2]!.works({ status: 404, location: null })).toBe(true);
-  expect(over[2]!.works({ status: 522, location: null })).toBe(false);
-  // a new mind's Onboarding app answers 401 to Node's fetch, which is no navigation; its 404
-  // says that the app is not there yet
-  expect(pages[2]!.works({ status: 401, location: null })).toBe(true);
-  expect(pages[2]!.works({ status: 404, location: null })).toBe(false);
+  expect(over.map((page) => page.address)).toEqual([
+    CONTROL_PLANE,
+    SIGN_IN,
+    OAUTH_META,
+    APEX,
+    ONBOARDING,
+    DASH,
+  ]);
+  expect(over[4]!.works({ status: 404, location: null })).toBe(true);
+  expect(over[4]!.works({ status: 522, location: null })).toBe(false);
+  // a new mind's Onboarding and Dash apps answer 401 to Node's fetch, which is no navigation; a
+  // 404 says that the app is not there yet
+  expect(pages[4]!.works({ status: 401, location: null })).toBe(true);
+  expect(pages[4]!.works({ status: 404, location: null })).toBe(false);
+  expect(pages[5]!.works({ status: 401, location: null })).toBe(true);
+  expect(pages[5]!.works({ status: 404, location: null })).toBe(false);
+  expect(pages[6]!.works({ status: 200, location: null })).toBe(true);
+  expect(pages[6]!.works({ status: 404, location: null })).toBe(false);
 
   type Answer = { status: number; location: string | null } | { error: string };
   const works: Record<string, Answer> = {
+    [CONTROL_PLANE]: { status: 302, location: "https://dash.ada-labs.com/" },
     [SIGN_IN]: { status: 200, location: null },
+    [OAUTH_META]: { status: 200, location: null },
     [APEX]: { status: 200, location: null },
     [ONBOARDING]: { status: 401, location: null },
+    [DASH]: { status: 401, location: null },
+    [ONBOARDING_APP]: { status: 200, location: null },
     [ACCESS]: {
       status: 302,
       location: "https://ada.cloudflareaccess.com/cdn-cgi/access/login/iterate.ada-labs.com",
@@ -1307,6 +1361,39 @@ test("the deploy opens no page until the pages a browser asks first work: the si
   expect(
     await never({ [ACCESS]: { status: 302, location: "https://iterate.ada-labs.com/sign-in" } }),
   ).toMatchObject({ outcome: { fault: `${ACCESS} answered 302 to https://iterate.ada-labs.com` } });
+});
+
+test("parseExtraOwnerEmails and deployConfigOf support adding additional owner sign-in emails", () => {
+  expect(parseExtraOwnerEmails("")).toEqual([]);
+  expect(parseExtraOwnerEmails("  ")).toEqual([]);
+  expect(parseExtraOwnerEmails("Personal@Gmail.com, other@example.org personal@gmail.com")).toEqual(
+    ["personal@gmail.com", "other@example.org"],
+  );
+  const config = deployConfigOf({
+    accountId: "a".repeat(32),
+    domain: "ada-labs.com",
+    owner: "cf@work.com",
+    extraOwners: ["Personal@Gmail.com", "cf@work.com"],
+  });
+  expect(config).toMatchObject({ ownerEmails: ["cf@work.com", "personal@gmail.com"] });
+});
+
+test("assertSupportedNodeVersion rejects Node < 24.7 before sign-in and accepts Node 24.7+", () => {
+  for (const old of ["18.20.0", "20.19.0", "22.14.0", "24.0.0", "24.6.9"]) {
+    expect(() => assertSupportedNodeVersion(old)).toThrow(/requires Node 24\.7 or newer.*HTTP 403/);
+  }
+  for (const ok of ["24.7.0", "24.12.1", "25.0.0", "26.13.0"]) {
+    expect(() => assertSupportedNodeVersion(ok)).not.toThrow();
+  }
+});
+
+test("a source that holds core/repos/onboarding tells the mind Worker's build to seed /repos/onboarding from it; an older source names no repo", () => {
+  const source = mkdtempSync(join(tmpdir(), "deploy-seed-"));
+  expect(seedReposEnvOf(source)).toEqual({});
+  mkdirSync(join(source, "core/repos/onboarding"), { recursive: true });
+  expect(JSON.parse(seedReposEnvOf(source).ITERATE_SEED_REPOS!)).toEqual({
+    "/repos/onboarding": join(source, "core/repos/onboarding"),
+  });
 });
 
 /** An account's answer for the settings of the Worker at each path in `found`, a 404 elsewhere. */

@@ -34,7 +34,9 @@ import {
 // (../cause.ts).
 import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
 import { type EmailHookArgs, expiredIfTheDeliveryIsGone } from "../email.ts";
+import { errorCode, reportIssue } from "../lib.ts";
 import { auth } from "./auth.ts";
+import { codeFailedFact, type CodeFailedWhere, scrubbedError } from "./code-failed.ts";
 import {
   currentCallerPath,
   currentOnBehalfOf,
@@ -372,9 +374,9 @@ export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = 
 };
 
 /** WHAT A MIND HOSTS BESIDE ITS OWN CODE — an integration package (iterate-telegram,
- *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo's
- *  `worker.ts` lists in `const integrations: Integration[]` and dispatches to
- *  (core/configs/default/worker.ts). A package's install hook is its `mind/worker-updated` case:
+ *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo
+ *  lists in `const integrations: Integration[]` and its worker dispatches to
+ *  (core/configs/default/integrations.ts, every-event.ts). A package's install hook is its `mind/worker-updated` case:
  *  there it registers its card on the mind's `/integrations` context (iterate/integrations),
  *  keyed by that event's path and offset, so the Dash lists it after every publish and a retry
  *  appends nothing new. A package keeps nothing across calls: not the host, not a scope, not a
@@ -402,7 +404,7 @@ export type Integration = {
 };
 
 /** Stateless config entrypoint, the default export of a mind's config repo; its init handles
- *  `events.iterate.com/mind/worker-updated` (core/configs/default/worker.ts). */
+ *  `events.iterate.com/mind/worker-updated` (core/configs/default/worker.ts, init.ts). */
 export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
@@ -423,18 +425,65 @@ export abstract class IterateConfigEntrypoint<
 
   constructor(ctx: ExecutionContext, env: Env) {
     super(ctx, env);
-    // The author's `fetch` runs under the cause its Request carries (../cause.ts). The loader
-    // never type-checks a config, so a class may lack the abstract `fetch`: each request then
-    // gets a page that says so, never a TypeError (the publication records the lack once:
-    // `mind/worker-updated`'s `missing`).
+    // WHAT THE CONFIG'S OWN CODE THREW, which nothing else sees (./code-failed.ts): a throw of
+    // its `fetch`, and a rejection of a promise it hands `this.ctx.waitUntil`, are each one
+    // `mind/code-failed` fact on `/`, appended after the answer through the runtime's own
+    // `waitUntil`. Recording never throws: the author's error is what the caller gets.
+    const keepAlive = ctx.waitUntil;
+    const hold = (promise: Promise<unknown>) => keepAlive.call(ctx, promise);
+    const record = (where: CodeFailedWhere, caught: unknown, request?: Request) => {
+      try {
+        const fact = codeFailedFact(where, caught, request);
+        if (fact) hold(this.#appendCodeFailed(fact));
+      } catch (error) {
+        reportIssue("config.code-failed", error);
+      }
+    };
+    // The author's `fetch` runs under the cause its Request carries (../cause.ts), and its throw
+    // or rejection reaches the caller unchanged. The loader never type-checks a config, so a
+    // class may lack the abstract `fetch`: each request then gets a page that says so, never a
+    // TypeError (the publication records the lack once: `mind/worker-updated`'s `missing`).
     const serve = implemented(this, "fetch");
     this.fetch = (request: Request) =>
       serve
-        ? runCausedBy(causeOfRequest(request), () => serve.call(this, request), "clear")
+        ? runCausedBy(
+            causeOfRequest(request),
+            async () => {
+              try {
+                return await serve.call(this, request);
+              } catch (error) {
+                record("fetch", error, request);
+                throw error;
+              }
+            },
+            "clear",
+          )
         : new Response("This mind's config has no fetch method, so it serves no page.\n", {
             status: 501,
             headers: { "content-type": "text/plain; charset=utf-8" },
           });
+    // workerd lets a loaded class give its own `ctx` an own `waitUntil`, and the author's
+    // `this.ctx.waitUntil` then calls it (core/mind-worker/src/context/config-code-failed.test.ts).
+    // A rejection is caught there, logged (scrubbed, as its fact is) and recorded; `waitUntil`
+    // from `cloudflare:workers` is not caught.
+    ctx.waitUntil = (promise: Promise<unknown>) =>
+      hold(
+        promise.catch((error: unknown) => {
+          reportIssue("config.wait-until", scrubbedError(error));
+          record("waitUntil", error);
+        }),
+      );
+  }
+
+  /** One `mind/code-failed` on `/`, through the config's own scope. A failed append is reported
+   *  once and dropped; a key that another isolate wrote first is the same fact. */
+  async #appendCodeFailed(fact: StreamEventInput): Promise<void> {
+    try {
+      using itx = this.getItx();
+      await itx.append(fact);
+    } catch (error) {
+      if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") reportIssue("config.code-failed", error);
+    }
   }
 
   /** The platform's delivery of one event (the dispatch boundary refuses any other caller),
@@ -458,9 +507,16 @@ export abstract class IterateConfigEntrypoint<
   async deliverEmail(args: EmailHookArgs): Promise<"done" | "missing"> {
     const email = implemented(this, "email");
     if (!email) return "missing";
-    // THE CONFIG'S OWN LINK TO THE FORWARD ENDS WITH THE DELIVERY: once the mind's call has
-    // returned, a call of the lent `forward` throws HERE, in this runtime, before the mind sees
-    // it. So this side says EXPIRED too (iterate/email `expiredIfTheDeliveryIsGone`).
+    // THE CONFIG'S OWN LINK TO `save` AND `forward` ENDS WITH THE DELIVERY: once the mind's call
+    // has returned, a call of either throws HERE, in this runtime, before the mind sees it. So this
+    // side says EXPIRED too (iterate/email `expiredIfTheDeliveryIsGone`).
+    const save = async () => {
+      try {
+        await args.save();
+      } catch (error) {
+        throw expiredIfTheDeliveryIsGone(error);
+      }
+    };
     const forward = async (to: string) => {
       try {
         await args.forward(to);
@@ -468,7 +524,7 @@ export abstract class IterateConfigEntrypoint<
         throw expiredIfTheDeliveryIsGone(error);
       }
     };
-    await email.call(this, { ...args, forward });
+    await email.call(this, { ...args, save, forward });
     return "done";
   }
 
@@ -502,8 +558,8 @@ export abstract class IterateConfigEntrypoint<
    *  parties also append to the mind's contexts through its API at `/api`, so much of a mind's
    *  logic reacts in `processEvent`. All three are abstract: the config's own `tsc` and editor ask
    *  for them. The loader never type-checks, so the platform still says what a class that lacks one
-   *  gets: a 501 page for each request, an event taken as handled, a mail kept and not passed on;
-   *  and one record of the lack for each published commit.
+   *  gets: a 501 page for each request, an event taken as handled, a mail that the platform
+   *  records on the log itself; and one record of the lack for each published commit.
    *
    *  THE AUTHOR HOOK: every durable event of every context of the mind from its first
    *  publication on (what was committed while no config was published may be passed over), one per
@@ -513,15 +569,19 @@ export abstract class IterateConfigEntrypoint<
   abstract processEvent(args: IterateConfigProcessEventArgs): void | Promise<void>;
 
   /** EVERY MAIL TO AN ADDRESS OF THE MIND, while its delivery is live. The platform has stored the
-   *  mail on `/integrations/email` before this runs (`email/received`, its files under `/email/`),
-   *  and `processEvent` gets that event too: replies and agents react there. This hook is for what
-   *  only a live delivery can do: `forward(to)` sends the original on, as it arrived
-   *  (iterate/email `EmailHookArgs` names its errors). Nothing here can lose the mail or fail its
-   *  delivery: a throw, or a hook that runs past the boundary's time limit, is an
-   *  `email/hook-failed` fact. The platform alone calls it.
+   *  mail's files under `/email/` before this runs. `save()` keeps the mail: the platform appends
+   *  `email/received` on `/integrations/email`, and `processEvent` gets that event: replies and
+   *  agents react there. A mail is off the log only when this RETURNS without calling `save`:
+   *  the mind then keeps its files alone, and no agent gets it. A throw, or a hook that runs past
+   *  the boundary's time limit, leaves the mail on the log (the platform records it), with an
+   *  `email/hook-failed` fact beside it, and does not fail the delivery. `forward(to)` sends the
+   *  original on, as it arrived (iterate/email `EmailHookArgs` names the errors of both). A save
+   *  that the mind did not take fails the delivery, so Cloudflare delivers the mail again. The
+   *  platform alone calls it.
    *
    *  ```ts
-   *  async email({ mail, forward }: EmailHookArgs) {
+   *  async email({ mail, save, forward }: EmailHookArgs) {
+   *    await save();
    *    if (mail.envelope.to === "team@example.com") await forward("team@elsewhere.example");
    *  }
    *  ```

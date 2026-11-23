@@ -68,6 +68,10 @@ that names your task BEFORE the task, not after a failure:
   limit: [mail-replies.md](mail-replies.md).
 - Before you let another mind in, send events to one, or act on what one sent:
   [minds.md](minds.md).
+- Before you add analytics or error reporting to a page: every page already has both
+  ([page-events.md](page-events.md)). To see what broke, `await itx.config.exceptions()`
+  ([errors.md](errors.md)). To see how fast the pages are, `await itx.config.pageSpeed()`
+  (page-events.md, "Speed").
 
 ## worker.ts
 
@@ -76,35 +80,53 @@ request) and `email` (every mail). Inside, `processEvent` adds every event; outs
 append to the mind's contexts through its API at `/api`, which is why much of a mind's logic
 lives in `processEvent`.
 
-`worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, which holds the hosts (a
-processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`):
+`worker.ts`'s class extends `ConfigApi` (`api.ts`), which extends `IterateConfigEntrypoint` from
+`iterate/sdk`, which holds the hosts (a processor imports `StreamProcessor` and
+`defineProcessorContract` from `iterate/stream/processor`). `worker.ts` holds the three methods
+and calls the files beside it:
 
 - `processEvent({ event, itx })` sees every durable event of every context of the mind, one at
   a time, in no particular order and at least once, so each case must be idempotent. `itx` is the
   mind's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
   read it from the mind. The comments of each case, and the header of the file it calls, say
-  what the case does.
+  what the case does. After the cases, `every-event.ts` runs the hooks that look at every event.
 - `fetch` serves every hostname of the mind's zones but its control-plane hostname, where the platform
   answers (sign-in, the API, MCP). It routes on `new URL(request.url).hostname`. An app's hostname
   is `<label>.<zone>` (`blog.example.com`), so `fetch` is a `switch` on the hostname's first
-  label, one case for each app, and any other hostname is the homepage's (GET and HEAD of `/`;
-  anything else that no case takes is a 404). The guard beside a
+  label, one case for each app, and any other hostname is the public website's (`website.ts`,
+  then the homepage, `homepage.ts`: GET and HEAD of `/`; anything else that no case takes is a
+  404). To make the site yours, change `homepage.ts`. The guard beside a
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
-- `email({ mail, forward })` runs for every mail to an address of the mind, while its delivery
-  is live. The platform has stored the mail on `/integrations/email` before, and `processEvent`
-  gets its `email/received` too: replies and agents react there. `await forward("a@b.c")`
-  sends the original on, as it arrived, to an address that a person verified as a destination
+- `email({ mail, save, forward })` runs for every mail to an address of the mind, while its
+  delivery is live. The platform has stored the mail's files under `/email/` before.
+  `await save()` keeps the mail: the platform appends `email/received` on
+  `/integrations/email`, once for each mail, and `processEvent` gets it: replies and agents
+  react there. A mail is off the log only when the hook returns without saving it: then only
+  its files are kept. A save that the mind does not take rejects, and the delivery fails, so
+  Cloudflare delivers the mail again. `await forward("a@b.c")` sends
+  the original on, as it arrived, to an address that a person verified as a destination
   in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
   (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
-  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
-  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
-  capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
-- `integrations` lists the integration packages this mind hosts (`Integration` from
-  `iterate/sdk`), one element each ([apps.md](apps.md)).
+  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), or a class
+  with no `email`, leaves the mail on the log: the platform records it, with an
+  `email/hook-failed` fact beside it. Await each save and forward:
+  both capabilities end when `email` returns, a call after that throws EXPIRED, and a forward
+  that is still running then ends EXPIRED.
 
-`worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
+  A `worker.ts` of your own must call `await save()` in an `email` that returns, or the mind
+  records no mail and no agent gets one: a hook that returns without saving has chosen to leave
+  the mail off the log.
+
+- `itx.config.<name>(…)` reaches every public method of the class: the mind's own API, for its
+  agents and its pages. The template's methods are in `api.ts`; add one there or to
+  `worker.ts`'s class.
+- `integrations` in `integrations.ts` lists the integration packages this mind hosts
+  (`Integration` from `iterate/sdk`), one element each ([apps.md](apps.md)). The kinds of agent
+  are `agentKinds` in `agent-kinds/index.ts` ([agent-kinds.md](agent-kinds.md)).
+
+`worker.ts` and the files it calls reach the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
 handle it awaited are released. Put it in the smallest block that holds its calls, await every
 call inside it, and hand data, not handles, out of it; an object that needs reach takes an
@@ -124,9 +146,12 @@ The agents' runtime is `iterate/agents`, which comes from the platform like the 
 `agents.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT plan, else
 an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](agent-kinds.md)).
 
-An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`:
-`onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts, and
-`onboarding/` holds one file for each job its subagents do. The init case creates it. On a mind
+An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`, when this
+repo has one. `/agents/onboarding` is the agent where a new owner starts. Its guides are in the
+repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
+told (the onboarding app appends it as an event when AI is proven working,
+`apps/onboarding/launch.ts`), `onboarding.md` is its long guide, and `onboarding/` holds one file
+for each job its subagents do. The init case creates the agent. On a mind
 that came through iterate Cloud the handover writes its first message and starts its first
 subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
 first opens its chat (`openers` in `apps/dash/public/app.js`).
@@ -215,7 +240,8 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
   steps as cards above the chat with `/agents/onboarding`, each button also the agent's
-  `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").
+  `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding"). Its page is the
+  repo `/repos/onboarding`.
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind
   ([people.md](people.md), "The guestbook").
 
@@ -324,6 +350,10 @@ them: the ways to sign in, the sign-in page, and a worked example.
 
 ## How the platform works
 
-The platform's source is public at https://github.com/iterate/core: read it before you guess how a
-capability behaves. `main` can differ from the code this mind runs: where they disagree, what a
-call answers is right.
+This mind keeps a local copy of the platform's public source (`https://github.com/iterate/core`)
+at `/repos/github.com/iterate/core` (synced daily; call
+`await itx.repos.get("/repos/github.com/iterate/core").pull()` to refresh it). Read it before you
+guess how a capability behaves:
+`await itx.repos.get("/repos/github.com/iterate/core").listFiles()` and
+`await itx.repos.get("/repos/github.com/iterate/core").readFile("core/AGENTS.md")`.
+`main` can differ from the code this mind runs: where they disagree, what a call answers is right.

@@ -156,6 +156,18 @@ test("itx.config.shareAgent makes the pages' link: the call turned on, the hash 
   expect(mind.appended.at(-1)).toMatchObject({ type: "share/link-ended" });
 });
 
+test("Dash sidebar keeps Contexts, Integrations, Config repo, and Analytics visible (not hidden under Settings)", () => {
+  const dashAppJs = readFileSync(
+    new URL("../../configs/default/apps/dash/public/app.js", import.meta.url),
+    "utf8",
+  );
+  for (const id of ["integrations", "repos", "contexts", "analytics"]) {
+    const block = new RegExp(`id:\\s*"${id}"[\\s\\S]*?component:`).exec(dashAppJs)?.[0];
+    expect(block, `Dash page "${id}" entry`).toBeTruthy();
+    expect(block).not.toMatch(/\brow\s*:\s*false\b/);
+  }
+});
+
 test("no file of the template names a path of the Dash that acts: the Integrations page's buttons call the mind's config", () => {
   const template = fileURLToPath(new URL("../../configs/default/", import.meta.url));
   const naming = readdirSync(template, { recursive: true, encoding: "utf8" })
@@ -167,15 +179,21 @@ test("no file of the template names a path of the Dash that acts: the Integratio
 
 test("an app's page asks for its session in its head, while its modules load, and app.js takes that answer", () => {
   const apps = new URL("../../configs/default/apps/", import.meta.url);
-  const read = (file: string) => readFileSync(new URL(file, apps), "utf8");
-  const asking = readdirSync(apps, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map(({ name }) => name)
-    .filter(
-      (app) =>
-        existsSync(new URL(`${app}/public/app.js`, apps)) &&
-        read(`${app}/public/app.js`).includes("/.auth/session.json"),
+  // the onboarding page is the repo /repos/onboarding (core/repos/onboarding), read as an app
+  const read = (file: string) =>
+    readFileSync(
+      file.startsWith("onboarding/")
+        ? new URL(`../../repos/${file}`, import.meta.url)
+        : new URL(file, apps),
+      "utf8",
     );
+  const asking = [
+    ...readdirSync(apps, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map(({ name }) => name)
+      .filter((app) => existsSync(new URL(`${app}/public/app.js`, apps))),
+    "onboarding",
+  ].filter((app) => read(`${app}/public/app.js`).includes("/.auth/session.json"));
   expect(asking).toEqual(expect.arrayContaining(["dash", "docs", "onboarding"]));
   for (const app of asking) {
     const page = read(`${app}/index.html`);

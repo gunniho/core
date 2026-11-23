@@ -33,6 +33,7 @@ import {
   BookOpenIcon,
   BotIcon,
   ChartLineIcon,
+  CircleCheckIcon,
   CompassIcon,
   FolderGit2Icon,
   HistoryIcon,
@@ -104,19 +105,12 @@ const pages = [
     // highlight, read. What the agent does there carries THAT MEMBER's stamp in the log, and the
     // page's audit row for the call names no caller. A jailed agent gets nothing. apps.md, "The
     // Dash", says what it costs.
-    // what the mind says first in an agent's empty chat, the first time anyone opens it: the
-    // onboarding agent greets a new owner (onboarding.md is what it is told)
-    openers: {
-      "/agents/onboarding":
-        "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').",
-    },
   },
   {
     id: "integrations",
     name: "Integrations",
     about: "The accounts and services the mind is connected to.",
     icon: BlocksIcon,
-    row: false,
     component: DashIntegrations,
   },
   {
@@ -132,7 +126,6 @@ const pages = [
     name: "Config repo",
     about: "The mind's code. A commit to main publishes it.",
     icon: FolderGit2Icon,
-    row: false,
     component: DashRepo,
   },
   {
@@ -140,7 +133,6 @@ const pages = [
     name: "Contexts",
     about: "Every context of the mind, raw and live.",
     icon: WaypointsIcon,
-    row: false,
     component: DashContexts,
   },
   // not every stack has telemetry: without it, the row says "Off"
@@ -150,7 +142,6 @@ const pages = [
     about: "The mind's telemetry.",
     icon: ChartLineIcon,
     serves: "telemetry",
-    row: false,
     component: DashAnalytics,
   },
   { id: "settings", name: "Settings", icon: SettingsIcon, component: DashSettings },
@@ -182,6 +173,12 @@ const apps = [
     about: "Set up this mind step by step.",
     host: "onboarding",
     icon: SparklesIcon,
+  },
+  {
+    name: "Tasks",
+    about: "Tasks and onboarding cards as a board.",
+    host: "tasks",
+    icon: CircleCheckIcon,
   },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 

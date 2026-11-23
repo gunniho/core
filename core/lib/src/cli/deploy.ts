@@ -154,6 +154,7 @@ export function deployConfigOf(answers: {
   accountId: string;
   domain: string;
   owner?: string;
+  extraOwners?: readonly string[];
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
@@ -175,7 +176,12 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The control plane cannot answer at ${controlPlaneHostname}: its hostname is ${zones.join(" or ")}, or one label under it. Cloudflare's certificate for a zone covers no deeper name.`,
     );
-  const ownerEmails = answers.owner ? [answers.owner.toLowerCase()] : deployed?.ownerEmails || [];
+  const ownerEmails = [
+    ...new Set([
+      ...(answers.owner ? [answers.owner.toLowerCase()] : deployed?.ownerEmails || []),
+      ...(answers.extraOwners || []).map((email) => email.trim().toLowerCase()).filter(Boolean),
+    ]),
+  ];
   const atTheMind = ownerEmails.find((email) => zoneOfMailAddress({ zones }, email));
   if (atTheMind)
     throw new Error(
@@ -363,16 +369,15 @@ type FirstPage = {
 
 /** THE PAGES THAT A PERSON'S BROWSER ASKS FIRST AFTER A DEPLOY. The command opens no page until
  *  each of them works from this computer, over HTTPS with no redirect followed:
- *   - the sign-in page answers 200;
+ *   - `https://<controlPlaneHostname>/`, `/sign-in`, and `/.well-known/oauth-authorization-server`:
+ *     proves `iterate.<domain>` (boundary + auth Worker + OAuth issuer metadata) is live;
  *   - the apex of the first zone answers below 400: the mind's own code (that request is also
  *     the one at which a new mind is born);
- *   - `https://onboarding.<zone>/`, THE PAGE THAT THE COMMAND OPENS: the wildcard's record,
- *     certificate and route are others than the apex's, and a control plane at the apex proves
- *     none of them. Below 500 says that the edge reached the mind. A new mind runs the template,
- *     whose Onboarding app answers 401 here: Node's fetch always says `sec-fetch-mode: cors`,
- *     which an app reads as a call and no navigation (a browser gets the redirect to the
- *     sign-in; core/boundary-worker/src/mind-host-sign-in.ts). Its 404 says the app is not
- *     there yet.
+ *   - `https://onboarding.<zone>/` and `https://dash.<zone>/` (plus on a first deploy
+ *     `https://onboarding.<zone>/.well-known/iterate-app` returning 200): proves the wildcard
+ *     record, certificate, route, and config Worker apps are live. Node's fetch sends
+ *     `sec-fetch-mode: cors`, so member apps answer 401 here (a browser redirects to sign-in);
+ *     404 says the app is not live yet.
  *   - for a new mind, `/sign-in/access`, the one way in for an owner with no passkey yet
  *     (core/auth-worker/src/access-sign-in.ts): Cloudflare Access redirects it to the team's
  *     sign-in. Until the Access application is live at the edge, the auth Worker itself answers
@@ -383,15 +388,24 @@ export function firstPagesOf(mind: {
   firstDeploy: boolean;
 }): FirstPage[] {
   const controlPlane = `https://${mind.controlPlaneHostname}`;
+  const memberHostWorks = ({ status }: { status: number }) =>
+    mind.firstDeploy ? status < 400 || status === 401 : status < 500;
   return [
+    { address: `${controlPlane}/`, works: ({ status }) => status < 400 },
     { address: `${controlPlane}/sign-in`, works: ({ status }) => status === 200 },
-    { address: `https://${mind.zone}/`, works: ({ status }) => status < 400 },
     {
-      address: onboardingUrlOf(mind.zone),
-      works: ({ status }) => (mind.firstDeploy ? status < 400 || status === 401 : status < 500),
+      address: `${controlPlane}/.well-known/oauth-authorization-server`,
+      works: ({ status }) => status === 200,
     },
+    { address: `https://${mind.zone}/`, works: ({ status }) => status < 400 },
+    { address: onboardingUrlOf(mind.zone), works: memberHostWorks },
+    { address: `https://dash.${mind.zone}/`, works: memberHostWorks },
     ...(mind.firstDeploy
       ? [
+          {
+            address: `https://onboarding.${mind.zone}/.well-known/iterate-app`,
+            works: ({ status }: { status: number }) => status === 200,
+          },
           {
             address: `${controlPlane}/sign-in/access`,
             works: ({ status, location }: { status: number; location: string | null }) =>
@@ -592,6 +606,30 @@ export const formatMindConfigForStdout = (config: Record<string, unknown>) =>
 
 /** Where setup continues in the browser once the mind is deployed and answering. */
 export const onboardingUrlOf = (zone: string) => `https://onboarding.${zone}/`;
+
+/** THE PAGE THE COMMAND OPENS AT THE END OF A DEPLOY, and the line printed right before
+ *  "Press Enter to open in browser...".
+ *  - On a first deploy, deep-links straight to `https://<controlPlaneHostname>/sign-in/access`
+ *    (Cloudflare Access verifies the owner's email, sends them to add their first passkey, and
+ *    `auth-worker` redirects to `onboarding.<zone>/` automatically — saving a click through `/sign-in`).
+ *  - On a redeploy, opens `https://onboarding.<zone>/` directly (the owner already has a passkey,
+ *    and `/sign-in/access` refuses owners who already have one).
+ *  Always prints the owner email address to sign in with before the Enter prompt. */
+export function setupDestinationOf(mind: {
+  controlPlaneHostname: string;
+  zone: string;
+  ownerEmails: string[];
+  firstDeploy: boolean;
+}) {
+  const url = mind.firstDeploy
+    ? `https://${mind.controlPlaneHostname}/sign-in/access`
+    : onboardingUrlOf(mind.zone);
+  const emails = mind.ownerEmails.join(" or ");
+  const prompt = emails
+    ? `Continue setup in your browser (sign in with ${emails}):`
+    : "Continue setup in your browser:";
+  return { url, prompt };
+}
 
 /** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
  *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
@@ -921,6 +959,16 @@ export function pnpmCommandOf(
   return { command: "npx", first: ["--yes", packageManager] };
 }
 
+/** THE REPOS A NEW MIND STARTS WITH beside its config, as the mind Worker's build reads them
+ *  (core/mind-worker/scripts/build.ts): `ITERATE_SEED_REPOS`, a repo path of the mind to a
+ *  folder of the source. A source that holds `core/repos/onboarding` seeds `/repos/onboarding`
+ *  from it; an older source names nothing, and its build seeds no repo. */
+export function seedReposEnvOf(sourceDir: string): { ITERATE_SEED_REPOS?: string } {
+  const onboarding = join(sourceDir, "core/repos/onboarding");
+  if (!existsSync(onboarding)) return {};
+  return { ITERATE_SEED_REPOS: JSON.stringify({ "/repos/onboarding": onboarding }) };
+}
+
 /** A checkout that holds core/alchemy, with its dependencies installed: `--source`, else the
  *  checkout this command runs in, else iterate/core at `ref` in the cache folder. A source whose
  *  core/alchemy is not the one script that this command writes the input of is refused. */
@@ -974,7 +1022,7 @@ async function sourceOf(input: DeployInput): Promise<Source> {
   // so `alchemy deploy` and `alchemy plan` do not have to rebuild it later
   await exec(pnpm.command, [...pnpm.first, "--filter", "core-mind-worker", "build"], {
     cwd: dir,
-    env: { ...pnpmEnvFor(pnpm.command), CI: "1" },
+    env: { ...pnpmEnvFor(pnpm.command), CI: "1", ...seedReposEnvOf(dir) },
     maxBuffer: 64 << 20,
   });
   return { dir, pnpm };
@@ -1053,6 +1101,8 @@ function deployOnce(
         FORCE_COLOR: "0",
         CLOUDFLARE_API_TOKEN: run.token,
         ITERATE_MIND_CONFIG: run.config,
+        // the deploy may build the mind Worker again: the same repos as `sourceOf`'s build
+        ...seedReposEnvOf(run.source.dir),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -1757,7 +1807,7 @@ export function identityKeyLineOf(
 ) {
   if (!existsSync(keyFile)) return undefined;
   if (!run.gaveTheId && !run.posted?.taken && !run.posted?.emptyBefore) return undefined;
-  return `Its identity key: ${keyFile.replace(homedir(), "~")}  (keep a copy: it proves that the mind is yours)`;
+  return `Its identity key: ${keyFile.replace(homedir(), "~")}  (not used right now — don't worry about it or if you lose it)`;
 }
 
 /** THE IDENTITY OF A MIND THAT HAS NONE (./identity.ts): the one that an earlier run on this
@@ -1805,6 +1855,36 @@ async function identityPublished(mind: { mindId: string; controlPlaneHostname: s
 // ---------------------------------------------------------------------------------------------
 // The command.
 
+/** Minimum Node version for `iterate deploy`: Node 24.7+ (ML-DSA-65 identity keys + modern TLS/fetch
+ *  so Cloudflare OAuth does not reject older runtimes with HTTP 403 / fetch failed). */
+export const MIN_DEPLOY_NODE = [24, 7] as const;
+
+/** Throws a clear upgrade error before opening a browser or calling Cloudflare when running on an
+ *  unsupported Node version (< 24.7). */
+export function assertSupportedNodeVersion(version = process.versions.node): void {
+  const match = /^v?(\d+)\.(\d+)/.exec(version.trim());
+  const major = match ? Number(match[1]) : 0;
+  const minor = match ? Number(match[2]) : 0;
+  const [minMajor, minMinor] = MIN_DEPLOY_NODE;
+  if (major > minMajor || (major === minMajor && minor >= minMinor)) return;
+  throw new Error(
+    `iterate deploy requires Node ${minMajor}.${minMinor} or newer (you are running Node v${version}). Older Node versions can fail Cloudflare sign-in (HTTP 403 / fetch failed) and lack ML-DSA-65 key support. Upgrade Node (e.g. brew install node, nvm install 24, fnm install 24, or https://nodejs.org) and run again.`,
+  );
+}
+
+/** Parses optional comma- or space-separated additional owner email addresses into a clean,
+ *  deduplicated lowercase list. */
+export function parseExtraOwnerEmails(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((part) => part.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export async function deployMind(input: DeployInput) {
   const began = Date.now();
   const children = new Set<ChildProcess>();
@@ -1816,6 +1896,7 @@ export async function deployMind(input: DeployInput) {
   try {
     if (process.platform === "win32")
       throw new Error("iterate deploy runs on macOS and Linux (on Windows: in WSL).");
+    assertSupportedNodeVersion();
     // the source comes while the person signs in and chooses
     const sourceBegan = Date.now();
     const source = sourceOf(input);
@@ -1891,7 +1972,7 @@ export async function deployMind(input: DeployInput) {
     }
     p.log.info(`Signed in to Cloudflare${login ? ` as ${login}` : ""}.`);
     // THE OWNER OF A NEW MIND: `--owner`, else the Cloudflare login, else a question. Asked for
-    // only where it is needed: a mind that is there already has its owners.
+    // only where it is needed: a mind that is there already keeps its owners.
     let asked: string | undefined;
     const newOwner = async () =>
       input.owner?.toLowerCase() ||
@@ -2006,10 +2087,32 @@ export async function deployMind(input: DeployInput) {
         );
     const unfinished = earlier?.mind;
     const mind = deployed || unfinished;
+    const primaryOwner = mind ? input.owner : await newOwner();
+    const extraOwners =
+      !mind && !input.owner && interactive() && primaryOwner
+        ? parseExtraOwnerEmails(
+            await ask<string>("", () =>
+              p.text({
+                message: `Add additional owner email addresses beside ${primaryOwner}? (comma-separated, or press Enter to skip)`,
+                placeholder: "e.g. you@personal.com",
+                defaultValue: "",
+                validate: (value) => {
+                  const trimmed = (value || "").trim();
+                  if (!trimmed) return undefined;
+                  const bad = parseExtraOwnerEmails(trimmed).find(
+                    (email) => !/^\S+@\S+\.\S+$/.test(email),
+                  );
+                  return bad ? `${bad} is not a valid email address` : undefined;
+                },
+              }),
+            ),
+          )
+        : [];
     const config = deployConfigOf({
       accountId: account.id,
       domain,
-      owner: mind ? input.owner : await newOwner(),
+      owner: primaryOwner,
+      extraOwners,
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
       mailForwardTo: input.mailForwardTo,
@@ -2145,6 +2248,10 @@ export async function deployMind(input: DeployInput) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
+    if (seedReposEnvOf(ready.dir).ITERATE_SEED_REPOS)
+      p.log.info(
+        "A new mind starts with the repo /repos/onboarding: its onboarding page, guides and cards.",
+      );
     mkdirSync(work, { recursive: true, mode: 0o700 });
     const log = join(work, "deploy.log");
     writeFileSync(log, "");
@@ -2338,12 +2445,18 @@ export async function deployMind(input: DeployInput) {
     // NO PAGE IS OPENED UNTIL THE PAGES THAT THE BROWSER ASKS FIRST WORK FROM THIS COMPUTER
     // (`firstPagesOf`). A person may wait again as often as they like; with nobody there, or
     // after their no, the command still ends every later step, opens nothing and then fails.
+    const isFirstDeploy = !deployed || Boolean(resuming?.firstDeploy);
     const primaryZone = config.cloudflare.zones[0] || domain;
-    const onboardingUrl = onboardingUrlOf(primaryZone);
+    const setup = setupDestinationOf({
+      controlPlaneHostname,
+      zone: primaryZone,
+      ownerEmails: config.ownerEmails,
+      firstDeploy: isFirstDeploy,
+    });
     const firstPages = firstPagesOf({
       controlPlaneHostname,
       zone: primaryZone,
-      firstDeploy: !deployed || Boolean(resuming?.firstDeploy),
+      firstDeploy: isFirstDeploy,
     });
     const answersBegan = Date.now();
     let unanswered: string | undefined;
@@ -2355,7 +2468,7 @@ export async function deployMind(input: DeployInput) {
         unanswered = undefined;
         break;
       }
-      unanswered = `The deploy finished, but after ${seconds(answersBegan)} ${answer.fault}. A new domain's DNS records, certificate and routes can reach a computer late. Setup was not opened: open ${onboardingUrl} once it loads in your browser, or run the command again, which deploys over the mind and checks again.`;
+      unanswered = `The deploy finished, but after ${seconds(answersBegan)} ${answer.fault}. A new domain's DNS records, certificate and routes can reach a computer late. Setup was not opened: open ${setup.url} once it loads in your browser, or run the command again, which deploys over the mind and checks again.`;
       answering.fail(`After ${seconds(answersBegan)}: ${answer.fault}.`);
       if (!interactive()) break;
       const again = await ask<boolean>("", () =>
@@ -2379,8 +2492,8 @@ export async function deployMind(input: DeployInput) {
     if (keyLine) p.log.info(keyLine);
     // the pages that did not answer end the command non-zero, with setup's address and no open
     if (unanswered) throw new Error(unanswered);
-    if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);
-    else p.log.step(`Continue setup in your browser:\n${c.url(onboardingUrl)}`);
+    if (input.setup !== false) await page(setup.prompt, setup.url);
+    else p.log.step(`${setup.prompt}\n${c.url(setup.url)}`);
     // the check's miss, said above, ends the command non-zero once every step is done
     if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);
