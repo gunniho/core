@@ -23,10 +23,12 @@ import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import type { GateDecision, GateFacts, GateState, RuleWriter } from "./acts-gate.ts";
 import {
+  AS_TYPED,
   ACT_RULES_PATH,
   ACTS_SCRIPT,
   actRules,
   actsData,
+  countOf,
   heldActs,
   PROPOSALS_PATH,
   proposedRules,
@@ -219,9 +221,9 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
   const requests = waiting
     .map(
       ({ path, held }) =>
-        `<section data-secret="${escaped(path)}"><h2>Requests with ${escaped(path)}</h2>${held
+        `<section class="waits" data-secret="${escaped(path)}"><h2>Requests with ${escaped(path)} ${countOf(held.length)}</h2>${held
           .map(
-            (row) => `<fieldset id="request-${escaped(row.digest)}">
+            (row) => `<fieldset class="held" id="request-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(summaryOf(row.text))}</label></legend>
 <p class="muted">Waiting since ${new Date(row.at).toISOString().slice(0, 16).replace("T", " ")} UTC.${row.state === "approved" ? " Approved: it goes when the same request is sent again." : ""}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>${filledInWords(path, row.text)}
 <dl class="facts" data-parts></dl>
@@ -230,25 +232,36 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
           )
           .join(
             "",
-          )}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject with passkey</button></p></section>`,
+          )}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="outline" data-reject>Reject with passkey</button></p></section>`,
     )
     .join("");
   const rules = secrets
     .filter((secret) => secret.rule)
     .map(({ path, rule, bodyFields }) => ruleForm(path, rule!, bodyFields))
     .join("");
+  const ruled = secrets.filter((secret) => secret.rule).length;
   const body = [
     "<h1>Approvals</h1>",
     `<p role="alert" data-type="error" data-keys hidden>You have no passkey or security key here. <a href="/keys?next=${encodeURIComponent(SECRET_APPROVALS_PATH)}">Add one</a>, then come back.</p>`,
     `<p role="alert" data-type="error" data-failure hidden></p>`,
     heldActs(gate),
     proposedRules(gate, (path) => secrets.find((secret) => secret.path === path)?.rule),
-    requests || (gate.held.length || gate.proposed.length ? "" : "<p>Nothing is waiting.</p>"),
-    actRules(gate),
-    "<h2>Rules for requests with a secret</h2>",
-    "<p>A request that uses a secret and matches that secret's rule waits on this page until a member approves it with a passkey.</p>",
-    rules,
-    ruleForm("", null),
+    requests ||
+      (gate.held.length || gate.proposed.length ? "" : nothingWaits(gate.rules.length + ruled)),
+    '<div class="folds">',
+    fold(
+      "acts",
+      "Rules for mail and calls",
+      `${gate.locked ? "Locked" : "Unlocked"} · ${rulesInWords(gate.rules.length)}`,
+      actRules(gate),
+    ),
+    fold(
+      "secrets",
+      "Rules for requests with a secret",
+      rulesInWords(ruled),
+      `<p>A request that uses a secret and matches that secret's rule waits on this page until a member approves it with a passkey.</p>${rules}${ruleForm("", null)}`,
+    ),
+    "</div>",
   ].join("");
   const data = {
     mind: deps.mind,
@@ -274,6 +287,28 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
   );
 }
 
+const rulesInWords = (count: number) =>
+  count ? `${count} ${count === 1 ? "rule" : "rules"}` : "No rules";
+
+/** THE RULES ARE UNDER WHAT WAITS, EACH PART FOLDED: a member comes to this page to answer, and
+ *  opens a part to change its rules. Closed, a part still says how it stands (`state`): locked or
+ *  not, and how many rules. The browser's own details, so a key press opens it as a click does;
+ *  the page's script keeps a part open over the page's own reloads. `body` is HTML. */
+const fold = (name: string, title: string, state: string, body: string) =>
+  `<details class="fold" data-fold="${name}"><summary><h2>${title}</h2><span class="muted">${state}</span></summary><div class="fold-body">${body}</div></details>`;
+
+/** THE PAGE WITH NOTHING TO ANSWER: a drawing of a ticked card over an emptied pile, and what
+ *  would wait here. With no rule at all it says that instead: nothing can wait. The drawing is
+ *  inline and coloured by the stylesheet (plain-page.css `.nothing`): the page loads no image. */
+const nothingWaits = (rules: number) => `<div class="nothing">
+<svg viewBox="0 0 160 112" aria-hidden="true"><rect class="sheet far" x="40" y="8" width="80" height="56" rx="10"/><rect class="sheet near" x="30" y="19" width="100" height="62" rx="11"/><rect class="sheet" x="20" y="32" width="120" height="70" rx="12"/><circle class="done" cx="50" cy="67" r="14"/><path class="tick" d="M43.5 67.5l4.5 4.5 8.5-9.5"/><rect class="line" x="76" y="57" width="48" height="7" rx="3.5"/><rect class="line" x="76" y="71" width="30" height="7" rx="3.5"/></svg>
+<h2>Nothing is waiting</h2>
+<p class="muted">${
+  rules
+    ? "A mail, a call or a request that a rule holds waits here until you approve it with a passkey."
+    : "No rule holds anything yet, so every mail, call and request goes without approval. Add a rule below."
+}</p></div>`;
+
 function summaryOf(text: string): string {
   const held = JSON.parse(text) as HeldRequest;
   return `${held.method} ${held.url}`;
@@ -285,7 +320,7 @@ function summaryOf(text: string): string {
 function filledInWords(path: string, text: string): string {
   const fills = fillsOfText(text)?.fields || [];
   return fills.length
-    ? `\n<p><strong>If you approve, the value of ${escaped(path)} is sent inside this request's body, in the field ${fills.map(escaped).join(" and ")}.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>`
+    ? `\n<p data-releases><strong>If you approve, the value of ${escaped(path)} is sent inside this request's body, in the field ${fills.map(escaped).join(" and ")}.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>`
     : "";
 }
 
@@ -301,7 +336,7 @@ export function ruleForm(
   bodyFields?: readonly SecretBodyField[],
 ): string {
   const field = (name: string, label: string, value: string, required = "required") =>
-    `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
+    `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${AS_TYPED} ${required}></label>`;
   // THE RULE IN WORDS, ABOVE ITS FIELDS: what waits and what stays free, as a proposed rule's row
   // says it. The page's script says them again from the fields as a member types.
   const words = path && rule ? secretRuleInWords({ ...rule, secret: path }) : "";
@@ -369,8 +404,9 @@ const fail = (error) => { failure.textContent = String(error && error.message ||
 
 // One row of a held thing's table (plain-page.css .facts): its name and its value as text, with
 // every space and tab of the value as it is in the text that was hashed (.exact). A value of
-// several lines goes in a pre; \`note\` is a quieter line over it, the page's own words.
-const factRow = (label, value, { block = false, note = "" } = {}) => {
+// several lines goes in a pre; \`note\` is a quieter line over it, the page's own words. \`words\`
+// marks a block that a person reads as writing (a mail's text): the same text, in the page's type.
+const factRow = (label, value, { block = false, note = "", words = false } = {}) => {
   const row = document.createElement("div");
   const name = document.createElement("dt");
   name.textContent = label;
@@ -383,6 +419,7 @@ const factRow = (label, value, { block = false, note = "" } = {}) => {
   }
   if (block) {
     const body = document.createElement("pre");
+    if (words) body.className = "words";
     body.textContent = value;
     cell.append(body);
   } else if (value) {
@@ -400,28 +437,40 @@ const keysLoaded = fetch("/keys.json", { credentials: "same-origin" })
   .then((answer) => answer.ok ? answer.json() : { keys: [] })
   .then((answer) => { keys = (answer.keys || []).filter((key) => key.credentialId); document.querySelector("[data-keys]").hidden = keys.length > 0; });
 
+// WHILE A KEY IS ASKED, EVERY BUTTON OF THE PAGE WAITS. A browser takes one request for a key at
+// a time, so a second press would fail and say so over a prompt that is still open.
+const buttonsWait = (wait) => { for (const button of document.querySelectorAll("button")) button.disabled = wait; };
+
 // stay: the caller signs more than one statement, and loads the page again itself.
 async function sign(fields, stay) {
   await keysLoaded;
   if (!keys.length) throw new Error("Add a passkey or a security key first.");
-  const now = Date.now();
-  const statement = JSON.stringify({ mind: data.mind, ...fields, at: now, expires: now + 5 * 60000, nonce: b64u(crypto.getRandomValues(new Uint8Array(16))) });
-  const assertion = await navigator.credentials.get({ publicKey: {
-    challenge: await sha256(signedBytes(statement)),
-    rpId: location.hostname,
-    userVerification: "required",
-    allowCredentials: keys.map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),
-  } });
-  const key = keys.find((key) => key.credentialId === assertion.id);
-  if (!key) throw new Error("That key is not one of yours here.");
-  const { signature, authenticatorData, clientDataJSON } = assertion.response;
-  const answer = await fetch("${STATEMENTS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-    statement,
-    signature: { format: "webauthn", key: key.key, sig: b64u(signature), authenticatorData: b64u(authenticatorData), clientDataJSON: b64u(clientDataJSON) },
-  }) });
-  const result = await answer.json();
-  if (result.error) throw new Error(result.error);
-  if (!stay) location.reload();
+  buttonsWait(true);
+  try {
+    const now = Date.now();
+    const statement = JSON.stringify({ mind: data.mind, ...fields, at: now, expires: now + 5 * 60000, nonce: b64u(crypto.getRandomValues(new Uint8Array(16))) });
+    const assertion = await navigator.credentials.get({ publicKey: {
+      challenge: await sha256(signedBytes(statement)),
+      rpId: location.hostname,
+      userVerification: "required",
+      allowCredentials: keys.map((key) => ({ type: "public-key", id: unb64u(key.credentialId) })),
+    } });
+    const key = keys.find((key) => key.credentialId === assertion.id);
+    if (!key) throw new Error("That key is not one of yours here.");
+    const { signature, authenticatorData, clientDataJSON } = assertion.response;
+    const answer = await fetch("${STATEMENTS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      statement,
+      signature: { format: "webauthn", key: key.key, sig: b64u(signature), authenticatorData: b64u(authenticatorData), clientDataJSON: b64u(clientDataJSON) },
+    }) });
+    const result = await answer.json();
+    if (result.error) throw new Error(result.error);
+  } catch (error) {
+    buttonsWait(false);
+    throw error;
+  }
+  // signed: the buttons wait on while the page loads again
+  if (stay) buttonsWait(false);
+  else location.reload();
 }
 
 for (const held of data.held) {
@@ -493,6 +542,14 @@ for (const form of document.querySelectorAll("[data-rule]")) {
     sign({ path: path(), type: data.types.rule, payload: { rule: typed() } }).catch(fail));
   form.querySelector("[data-remove-rule]")?.addEventListener("click", () =>
     sign({ path: path(), type: data.types.rule, payload: { rule: null } }).catch(fail));
+}
+
+// A part of the rules that a member opened stays open over the page's own reloads (a save, a
+// signature), for this tab alone.
+for (const part of document.querySelectorAll("[data-fold]")) {
+  const key = "approvals-fold-" + part.dataset.fold;
+  part.open = sessionStorage.getItem(key) === "open";
+  part.addEventListener("toggle", () => sessionStorage.setItem(key, part.open ? "open" : "closed"));
 }
 
 if (wanted) document.getElementById("request-" + wanted)?.scrollIntoView({ block: "center" });

@@ -13,8 +13,9 @@ The owner should come away with: some acts wait for their passkey, and they watc
 - A held call waits five minutes for the owner, then throws ("this mail waits for a member's
   approval, at https://<control-plane hostname>/secrets/approvals?digest=…"). The owner can still approve
   it for a day; it is done then, once. Never send it again.
-- The rules for mail and calls start OPEN: until the owner presses "Lock these rules" there and
-  signs, the mind's code can change them unsigned. Say so when they want a rule that binds you too.
+- The rules for mail and calls start OPEN: until the owner opens "Rules for mail and calls"
+  there, presses "Lock these rules" and signs, the mind's code can change them unsigned. Say so
+  when they want a rule that binds you too.
 
 ## Not ready
 

@@ -63,6 +63,14 @@ export function secretRuleInWords({
   return `${which}${body}. What stays free: ${free.join("; ")}.`;
 }
 
+/** A FIELD OF A RULE IS A NAME, NOT WRITING: a method, a host, a path, a verb. A phone's keyboard
+ *  must leave it as typed: no first capital (`Email.send` is no verb), no correction of a host. */
+export const AS_TYPED =
+  'autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false"';
+
+/** How many wait in a part of the page, beside the part's name (plain-page.css `.count`). */
+export const countOf = (count: number) => `<span class="count">${count}</span>`;
+
 /** The acts that wait: one group each, newest first. Empty when none waits. */
 export function heldActs(gate: Gate): string {
   const held = gate.held.toSorted((a, b) => b.at - a.at);
@@ -76,15 +84,15 @@ export function heldActs(gate: Gate): string {
           : row.waited
             ? " Whoever asked waits for your answer now."
             : " Whoever asked stopped waiting. If you approve, it is done then, and they get the result.";
-      return `<fieldset id="act-${escaped(row.digest)}">
+      return `<fieldset class="held" id="act-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(act ? summaryOf(act) : "An act this page cannot read")}</label></legend>
-<dl class="facts" data-parts></dl>
 <p class="muted">Waiting since ${new Date(row.at).toISOString().slice(0, 16).replace("T", " ")} UTC.${caller}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>
+<dl class="facts" data-parts></dl>
 <details><summary>The exact text you sign for</summary><pre data-text></pre></details>
 <p class="muted" data-check>Checking…</p></fieldset>`;
     })
     .join("");
-  return `<section data-acts><h2>Mail and calls</h2>${groups}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject with passkey</button></p></section>`;
+  return `<section class="waits" data-acts><h2>Mail and calls ${countOf(held.length)}</h2>${groups}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="outline" data-reject>Reject with passkey</button></p></section>`;
 }
 
 /** THE RULES THAT WAIT FOR A MEMBER'S YES: what an agent or the mind's code proposed. Each is a
@@ -104,7 +112,7 @@ export function proposedRules(
       const { replaces, holdsLess } = isSecretRule(rule)
         ? whatASecretRuleReplaces(rule, ruleNowOf(rule.secret))
         : whatAnActRuleReplaces(rule, gate.rules);
-      return `<fieldset id="proposal-${escaped(id)}" data-proposal="${escaped(id)}">
+      return `<fieldset class="held" id="proposal-${escaped(id)}" data-proposal="${escaped(id)}">
 <legend><label><input type="checkbox" data-pick="${escaped(id)}"> ${escaped(isSecretRule(rule) ? secretRuleInWords(rule) : ruleInWords(rule))}</label></legend>
 ${replaces ? `<p data-replaces>${escaped(replaces)}</p>` : ""}
 ${holdsLess ? `<p data-holds-less><strong>After this, less waits than now.</strong> Read both rules before you approve.</p>` : ""}
@@ -112,7 +120,7 @@ ${holdsLess ? `<p data-holds-less><strong>After this, less waits than now.</stro
 <details open><summary>The exact rule you sign for</summary><pre>${escaped(JSON.stringify(rule, null, 1))}</pre></details></fieldset>`;
     })
     .join("");
-  return `<section data-proposals id="proposed"><h2>Proposed rules</h2>${rows}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject</button></p></section>`;
+  return `<section class="waits" data-proposals id="proposed"><h2>Proposed rules ${countOf(gate.proposed.length)}</h2>${rows}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="outline" data-reject>Reject</button></p></section>`;
 }
 
 /** WHAT AN APPROVED PROPOSAL TAKES AWAY. A proposed rule comes in the place of the rule that is
@@ -138,7 +146,7 @@ function whatAnActRuleReplaces(rule: ActRule, rules: ActRule[]) {
   };
 }
 
-/** The rules for acts, and the lock. */
+/** The rules for acts, and the lock: what is inside the page's fold "Rules for mail and calls". */
 export function actRules(gate: Gate): string {
   const rules = gate.rules
     .map(
@@ -146,15 +154,14 @@ export function actRules(gate: Gate): string {
         `<li>${escaped(ruleInWords(rule))} <span class="muted">(${escaped(rule.verb)})</span> <button type="button" class="link" data-drop-act-rule="${index}">Remove</button></li>`,
     )
     .join("");
-  return `<h2>Rules for mail and calls</h2>
-${lock(gate.locked)}
+  return `${lock(gate.locked)}
 <p>Mail and calls that match a rule wait on this page until a member approves them with a passkey. Everything else goes at once. Whoever asked waits five minutes; after that you can still approve for a day, and it is done then.</p>
 ${rules ? `<ul>${rules}</ul>` : `<p><strong>No rules:</strong> every mail and every call goes without approval.</p>`}
 <p class="muted">A rule holds mail whatever sends it, and a call when this mind's agents or its loaded code make it. It holds nothing if the mind's own Worker was changed to skip it, which the owner of a home lab can do.</p>
 <form class="stack" data-act-rule>
 <h3>A new rule</h3>
-<label>What needs approval <input name="verb" value="email.send" size="44" required></label>
-<label>Mail only: to these recipients (empty for all mail) <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
+<label>What needs approval <input name="verb" value="email.send" size="44" ${AS_TYPED} required></label>
+<label>Mail only: to these recipients (empty for all mail) <input name="to" placeholder="*@example.com, jo@example.org" size="44" ${AS_TYPED}></label>
 <p class="muted">email.send is mail. itx.whatsapp.sendMessage is one call, and itx.whatsapp.* is every call under it.</p>
 <p class="actions"><button type="submit">Add the rule</button></p></form>`;
 }
@@ -230,7 +237,8 @@ for (const held of data.acts) {
     if (act.cc.length) parts.append(factRow("Copy to", act.cc.join(", ")));
     parts.append(factRow("Subject", act.subject));
     // a part's own words (which part it is, and what a mail program shows) stay over its text
-    for (const part of mailBodiesOf(act)) parts.append(factRow("Body", part.body, { block: true, note: part.label }));
+    // the text part reads as a mail does; the HTML part is source, so it stays in a fixed-width font
+    for (const part of mailBodiesOf(act)) parts.append(factRow("Body", part.body, { block: true, note: part.label, words: part.body !== act.html }));
     for (const file of act.attachments) parts.append(factRow("Attached", file.filename + " (" + file.contentType + ", " + file.size + " bytes)"));
   } else {
     parts.append(factRow("Call", act.act));

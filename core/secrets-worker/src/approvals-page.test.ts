@@ -38,6 +38,44 @@ test("no value of the page comes from its address: a link with a rule's words in
   expect(ruleForm("", null)).not.toContain("data-sign-rule");
 });
 
+test("with nothing to answer the page says so, and that nothing can wait while no rule holds anything; the rules are folded under it, each part's state on its closed line", async () => {
+  const rule = { methods: ["POST"], hosts: ["api.fastmail.com"] };
+  const opened = async (locked: boolean, paths: string[]) => {
+    const page = await secretApprovals(
+      new Request("https://iterate.example.com/secrets/approvals", { headers: asMember() }),
+      {
+        mind: "example.com",
+        index: { paths: async () => paths, remove: async () => undefined },
+        secretOf: () => ({
+          approvals: async () => ({ rule, held: [] }),
+          tightenRule: async () => ({ result: { rule }, facts: [] }),
+          decide: async () => ({ result: {}, facts: [] }),
+        }),
+        gate: {
+          ...idleGate(),
+          state: async () => ({ locked, rules: [], proposed: [], held: [] }),
+        },
+      },
+    );
+    return page.text();
+  };
+  const [bare, ruled] = [await opened(false, []), await opened(true, ["/secrets/fastmail"])];
+  for (const html of [bare, ruled]) expect(html).toContain("<h2>Nothing is waiting</h2>");
+  expect(bare).toContain("No rule holds anything yet");
+  expect(ruled).toContain("that a rule holds waits here until you approve it with a passkey");
+  // a closed part says how it stands, and the forms are inside it
+  expect(bare).toContain(
+    '<details class="fold" data-fold="acts"><summary><h2>Rules for mail and calls</h2><span class="muted">Unlocked · No rules</span></summary>',
+  );
+  expect(ruled).toContain('<span class="muted">Locked · No rules</span>');
+  expect(ruled).toContain(
+    '<summary><h2>Rules for requests with a secret</h2><span class="muted">1 rule</span></summary>',
+  );
+  expect(ruled.indexOf('data-fold="secrets"')).toBeLessThan(ruled.indexOf("data-rule"));
+  // a part that a member opened stays open over the page's own reloads
+  expect(SCRIPT).toContain('part.open = sessionStorage.getItem(key) === "open";');
+});
+
 test("a secret's rule is said in words above its fields, and the script says them again from the fields that Save posts and the key signs", () => {
   const rule = {
     methods: ["POST"],
@@ -300,7 +338,7 @@ test("a held request says what an approval releases, from the fields that it was
   };
   expect({
     fills: row("fills").includes(
-      "<p><strong>If you approve, the value of /secrets/sink is sent inside this request's body, in the field config.token.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>",
+      "<p data-releases><strong>If you approve, the value of /secrets/sink is sent inside this request's body, in the field config.token.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>",
     ),
     fillsNothing: row("fills-nothing").includes("If you approve"),
     rule: html.includes(
