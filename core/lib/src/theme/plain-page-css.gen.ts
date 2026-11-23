@@ -297,9 +297,27 @@ color: var(--primary-foreground);
 font-size: 0.875rem;
 font-weight: 500;
 cursor: pointer;
+-webkit-tap-highlight-color: transparent;
+touch-action: manipulation;
+-webkit-user-select: none;
+user-select: none;
 }
+@media (hover: hover) and (pointer: fine) {
 button:hover {
 background: color-mix(in oklab, var(--primary) 90%, transparent);
+}
+}
+button:not(.link):active {
+opacity: 0.8;
+}
+@media (prefers-reduced-motion: no-preference) {
+button:not(.link) {
+transition: scale 0.15s ease-out;
+}
+button:not(.link):active {
+scale: 0.97;
+opacity: 1;
+}
 }
 button.link {
 min-height: 0;
@@ -366,8 +384,10 @@ border: 1px solid var(--border);
 background: var(--background);
 color: var(--foreground);
 }
+@media (hover: hover) and (pointer: fine) {
 button.outline:hover {
 background: var(--accent);
+}
 }
 button:has(> svg) {
 display: inline-flex;
@@ -819,7 +839,8 @@ height: 1.125rem;
 .reveal[aria-pressed="false"] .hides {
 display: none;
 }
-button[aria-disabled="true"] {
+button[aria-disabled="true"],
+button:disabled {
 cursor: progress;
 opacity: 0.6;
 }
@@ -840,8 +861,369 @@ display: inline-flex;
 }
 a.button:hover {
 background: color-mix(in oklab, var(--primary) 90%, transparent);
+}
+.waits {
+display: flex;
+flex-direction: column;
+gap: 0.75rem;
+}
+.waits + .waits {
+margin-top: 0.75rem;
+}
+.waits > h2 {
+display: flex;
+align-items: center;
+gap: 0.5rem;
+color: var(--muted-foreground);
+font-size: 0.8125rem;
+font-weight: 500;
+}
+.held {
+display: flex;
+flex-direction: column;
+gap: 0.75rem;
+min-width: 0;
+padding: 1rem 1.125rem 1.125rem;
+border-color: color-mix(in oklab, var(--foreground) 9%, transparent);
+transition:
+border-color 0.15s ease-out,
+box-shadow 0.15s ease-out;
+}
+.held:has([data-pick]:checked) {
+border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+.held > legend {
+float: none;
+display: contents;
+}
+.held > legend > label {
+gap: 0.75rem;
+font-size: 1rem;
+font-weight: 600;
+line-height: 1.4;
+text-wrap: pretty;
+cursor: pointer;
+touch-action: manipulation;
+}
+.held [data-pick] {
+flex: none;
+width: 1rem;
+height: 1rem;
+margin: 0;
+accent-color: var(--primary);
+transform: translateY(0.125rem);
+}
+.held [data-pick]:disabled {
+cursor: not-allowed;
+}
+.held > :not(legend) {
+margin-left: 1.75rem;
+}
+.held > p {
+text-wrap: pretty;
+}
+.held > .muted {
+font-size: 0.8125rem;
+}
+.held > legend + .muted {
+margin-top: -0.375rem;
+}
+.held > [data-releases],
+.held > [data-holds-less] {
+padding-left: 0.75rem;
+border-left: 2px solid var(--warning);
+}
+.held > .facts {
+display: grid;
+grid-template-columns: fit-content(40%) minmax(0, 1fr);
+gap: 0.3125rem 1.25rem;
+margin-block: 0;
+border: 0;
+border-radius: 0;
+}
+.held > .facts > div {
+grid-column: 1 / -1;
+grid-template-columns: subgrid;
+padding: 0;
+}
+.held > .facts > div + div {
+border-top: 0;
+}
+.held > .facts > div:has(> dd > pre) {
+gap: 0.375rem;
+margin: 0.5rem 0 0.25rem;
+}
+.held > .facts > div:has(> dd > pre) > * {
+grid-column: 1 / -1;
+}
+.held > .facts > div:has(> dd > pre.words) > dt {
+position: absolute;
+width: 1px;
+height: 1px;
+overflow: hidden;
+clip-path: inset(50%);
+white-space: nowrap;
+}
+.held pre {
+padding: 0.875rem 1rem;
+background: color-mix(in oklab, var(--muted) 70%, transparent);
+line-height: 1.55;
+}
+.held .facts dd > pre {
+margin-top: 0;
+}
+.held .facts .note + pre {
+margin-top: 0.375rem;
+}
+.held pre.words {
+color: var(--foreground);
+font-family: inherit;
+font-size: 1rem;
+line-height: 1.6;
+}
+.held > details {
+font-size: 0.8125rem;
+}
+.held > details > summary {
+width: fit-content;
+color: var(--muted-foreground);
+font-weight: 500;
+cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+.held > details > summary:hover {
+color: var(--foreground);
+}
+}
+.held > details > pre {
+margin-top: 0.5rem;
+}
+.held > [data-check] {
+margin-top: -0.375rem;
+}
+.held[data-checked] > [data-check]::before {
+margin-right: 0.375rem;
+color: var(--success);
+font-weight: 600;
+content: "✓";
+}
+.waits > .actions {
+position: sticky;
+bottom: 0;
+margin: 0 -0.5rem;
+padding: 0.75rem 0.5rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+background: var(--card);
+}
+.nothing {
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: 0.375rem;
+padding: 3rem 1rem 3.5rem;
+text-align: center;
+}
+.nothing > svg {
+width: 10rem;
+height: 7rem;
+margin-bottom: 1.25rem;
+overflow: visible;
+pointer-events: none;
+user-select: none;
+}
+.nothing .sheet {
+fill: var(--card);
+stroke: color-mix(in oklab, var(--foreground) 12%, transparent);
+filter: drop-shadow(0 1px 1px rgb(0 0 0 / 4%)) drop-shadow(0 4px 8px rgb(0 0 0 / 5%));
+}
+.nothing .sheet.near {
+fill: color-mix(in oklab, var(--muted) 55%, var(--card));
+filter: none;
+}
+.nothing .sheet.far {
+fill: var(--muted);
+stroke: color-mix(in oklab, var(--foreground) 7%, transparent);
+filter: none;
+}
+.nothing .done {
+fill: var(--foreground);
+}
+.nothing .tick {
+fill: none;
+stroke: var(--card);
+stroke-width: 2.5;
+stroke-linecap: round;
+stroke-linejoin: round;
+stroke-dasharray: 20;
+}
+.nothing .line {
+fill: color-mix(in oklab, var(--foreground) 9%, transparent);
+}
+.nothing > h2 {
+font-size: 1.0625rem;
+}
+.nothing > p {
+max-width: 24rem;
+text-wrap: balance;
+}
+@media (prefers-reduced-motion: no-preference) {
+.nothing .tick {
+animation: nothing-ticks 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards;
+}
+.fold > summary::after {
+transition: transform 0.15s ease-out;
+}
+}
+@keyframes nothing-ticks {
+from {
+stroke-dashoffset: 20;
+}
+}
+.folds {
+display: flex;
+flex-direction: column;
+gap: 0.5rem;
+}
+.fold {
+border: 1px solid var(--border);
+border-radius: var(--radius);
+}
+.fold > summary {
+display: flex;
+align-items: center;
+gap: 0.75rem;
+padding: 0.75rem 1rem;
+border-radius: inherit;
+cursor: pointer;
+list-style: none;
+-webkit-tap-highlight-color: transparent;
+touch-action: manipulation;
+-webkit-user-select: none;
+user-select: none;
+}
+.fold > summary::-webkit-details-marker {
+display: none;
+}
+@media (hover: hover) and (pointer: fine) {
+.fold > summary:hover {
+background: color-mix(in oklab, var(--muted) 60%, transparent);
+}
+}
+.fold > summary:active {
+background: var(--muted);
+}
+.fold > summary > h2 {
+flex: 1;
+font-weight: 500;
+}
+.fold > summary > .muted {
+font-size: 0.8125rem;
+white-space: nowrap;
+}
+.fold > summary::after {
+flex: none;
+width: 0.375rem;
+height: 0.375rem;
+margin: 0 0.25rem 0.125rem 0;
+border-right: 1.5px solid var(--muted-foreground);
+border-bottom: 1.5px solid var(--muted-foreground);
+transform: rotate(45deg);
+content: "";
+}
+.fold[open] > summary::after {
+margin-bottom: -0.125rem;
+transform: rotate(-135deg);
+}
+.fold[open] > summary {
+border-bottom: 1px solid var(--border);
+border-bottom-right-radius: 0;
+border-bottom-left-radius: 0;
+}
+.fold-body {
+display: flex;
+flex-direction: column;
+gap: 1rem;
+padding: 1rem;
+}
+.fold-body > p,
+.fold-body .muted {
+text-wrap: pretty;
+}
+.fold-body > form {
+padding-top: 1rem;
+border-top: 1px solid var(--border);
+}
+.fold-body h3 {
+margin: 0;
+font-size: inherit;
+font-weight: 600;
+}
+.fold-body form details {
+font-size: 0.875rem;
+}
+.fold-body form details > summary {
+width: fit-content;
+color: var(--muted-foreground);
+cursor: pointer;
+}
+.fold-body form details > p {
+margin-top: 0.5rem;
+}
+.fold-body .actions > [data-remove-rule] {
+margin-left: auto;
+color: var(--destructive);
+}
+@media (pointer: coarse) {
+.waits > .actions > button,
+.fold-body button,
+dialog button {
+min-height: 2.75rem;
+}
+.held > legend > label {
+margin-block: -0.6875rem;
+padding-block: 0.6875rem;
+}
+.held > details > summary,
+.fold-body form details > summary {
+position: relative;
+}
+.held > details > summary::before,
+.fold-body form details > summary::before {
+position: absolute;
+inset: -0.75rem 0;
+content: "";
+}
+.fold-body li {
+padding-block: 0.25rem;
+}
+.fold-body input:not([type="hidden"]) {
+min-height: 1.875rem;
+}
+}
+@media (max-width: 40rem) {
+.held {
+padding: 0.875rem 0.875rem 1rem;
+}
+.held > :not(legend) {
+margin-left: 0;
+}
+.nothing {
+padding: 2rem 0 2.5rem;
+}
+.waits > .actions {
+gap: 0.5rem;
+}
+.waits > .actions > button {
+flex: 1 1 auto;
+padding: 0 0.5rem;
+white-space: nowrap;
+}
+.fold > summary {
+flex-wrap: wrap;
+gap: 0.125rem 0.75rem;
+}
 }`;
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-eOpsA+PohMVZskqVroM9x40UXrfcbtKUoNY8w+xjSqg='";
+export const plainPageCssHash = "'sha256-p+GFKmBtc31pO5Eknwd32K0le89Wn5AHomwOaDrFdxc='";
