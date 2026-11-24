@@ -56,7 +56,10 @@ A rule makes an act wait until a member approves it with a passkey, on
   format: "p256", key, sig } }` to `/secrets/approvals/statements`. It changes no rule and no
   lock, and adds no key, no member and no event. `itx.approvals.held()` answers what waits with
   its exact text: the app hashes `text` itself and shows it only when the SHA-256 is `digest`,
-  since the mind's code relays the answer.
+  since the mind's code relays the answer. `itx.approvals.waiting()` answers everything that
+  waits for a member's key (`acts`, proposed `rules`, a secret's `requests`) as one short row
+  each, with `until` and no text: use it to tell a member that something waits, on a lock screen
+  or in a count, and `held()` where they read what they decide.
 - To have a member vouch for one event, call
   `itx.approvals.proposeStatement({ path, type, payload })` and give the member the `signAt` link
   it answers. The page needs no sign-in and shows the exact event; one passkey press signs it,

@@ -5,7 +5,7 @@ import type { Door, ProposedBy } from "iterate/workers";
 import { hopCaller } from "./hop-caller.ts";
 
 export const APPROVALS_ROOT_DESCRIPTION =
-  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.held()` → [{ digest, text, at, until, from?, waited }], the mail and the calls that wait now, each with its exact text (a reader that shows one for a decision checks that the SHA-256 of `text` is `digest`) · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`; with `{ secret, methods, hosts, jsonStrings?, freePaths? }`, where `secret` is a secret's path, it proposes a rule for a request with that secret; a proposal holds nothing, and only a member puts a rule for a secret in force, so this is the one way for code or an agent to get one. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then · `approvals.proposeStatement({ path, type, payload, signerEmail?, next? })` → { draft, signAt, expires } asks a person to sign one event at `signAt`, a page with no sign-in, for a day; signed, it lands on `path` with the person as `event.source.signer`, the one field to trust (never the payload). A member signs at any path; anyone else at their own context alone, `/people/<address>`. `event.source.signer.member` says which: check that it is `true` where you want a member's word. `signerEmail`: the one person whose passkey the page takes";
+  "what waits for a member's signed yes before it is done: `approvals.rules()` → { locked, rules } · `approvals.held()` → [{ digest, text, at, until, from?, waited }], the mail and the calls that wait now, each with its exact text (a reader that shows one for a decision checks that the SHA-256 of `text` is `digest`) · `approvals.waiting()` → { acts: [{ digest, act, summary, at, until, from? }], rules: [{ id, at, verb?, secret?, from? }], requests: [{ digest, secret, summary, at, until, from? }] }, everything that waits for a member's key now, as one short row each and with no text: the held mail and calls, the proposed rules, and the requests a secret holds · `approvals.setRules([{ verb, to? }])` replaces the rules while they are open (not locked) · `approvals.propose({ verb, to? })` → { id, signAt } asks a member to sign one rule at `signAt`; with `{ secret, methods, hosts, jsonStrings?, freePaths? }`, where `secret` is a secret's path, it proposes a rule for a request with that secret; a proposal holds nothing, and only a member puts a rule for a secret in force, so this is the one way for code or an agent to get one. A rule's `verb` is `email.send` (with `to: [\"*@example.com\"]` for mail to some recipients alone), one verb such as `itx.whatsapp.sendMessage`, or every verb under a name, `itx.whatsapp.*`. A held call waits five minutes for the member, then throws; the act can be approved for a day, and is done then · `approvals.proposeStatement({ path, type, payload, signerEmail?, next? })` → { draft, signAt, expires } asks a person to sign one event at `signAt`, a page with no sign-in, for a day; signed, it lands on `path` with the person as `event.source.signer`, the one field to trust (never the payload). A member signs at any path; anyone else at their own context alone, `/people/<address>`. `event.source.signer.member` says which: check that it is `true` where you want a member's word. `signerEmail`: the one person whose passkey the page takes";
 
 /** A rule for a request with a secret, as the mind's code proposes it: the vault checks it, and a
  *  member signs it as that secret's rule. */
@@ -23,7 +23,7 @@ export function approvalsRoot(
   context: ItxHostRootContext,
   egress: Pick<
     Door,
-    "actRules" | "heldActs" | "setActRules" | "proposeActRule" | "proposeStatement"
+    "actRules" | "heldActs" | "waiting" | "setActRules" | "proposeActRule" | "proposeStatement"
   >,
   controlPlaneOrigin: string,
 ) {
@@ -45,6 +45,9 @@ export function approvalsRoot(
     // What waits, each with its exact text: an app of the mind shows it to a member whose
     // device's key then signs a yes or a no for its digest.
     held: () => releasedAnswer(egress.heldActs()),
+    // What waits, with no text: for code that tells a member that something waits (an alert, a
+    // lock screen, a count) and has no need of the words they will sign for.
+    waiting: () => releasedAnswer(egress.waiting()),
     setRules: async (rules: ActRule[]) => {
       const set = await releasedAnswer(
         egress.setActRules({ rules, from: from().path || context.path }),

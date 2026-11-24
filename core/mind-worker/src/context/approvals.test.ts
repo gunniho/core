@@ -13,6 +13,9 @@ test("what the gate answers the mind's own code is released when it has been rea
   // what waits comes with its exact text, for a reader that hashes it
   expect(await approvals.held()).toEqual([waits]);
   expect(gate.open()).toBe(0);
+  // and, for a reader that only says that something waits, as short rows with no text
+  expect(await approvals.waiting()).toEqual({ acts: [waiting], rules: [], requests: [] });
+  expect(gate.open()).toBe(0);
   // an answer with facts: its facts are appended from the copy, and its session is let go
   expect(await approvals.setRules([rule])).toEqual([rule]);
   expect(gate.open()).toBe(0);
@@ -22,7 +25,7 @@ test("what the gate answers the mind's own code is released when it has been rea
     signAt: "https://iterate.example.com/secrets/approvals#proposed",
   });
   expect(gate.open()).toBe(0);
-  expect(gate).toMatchObject({ asked: 4, released: 4, appended: 2 });
+  expect(gate).toMatchObject({ asked: 5, released: 5, appended: 2 });
 });
 
 test("a proposed statement names the calling context as its asker and answers the page's link", async () => {
@@ -115,6 +118,13 @@ test.for([
 
 const rule = ActRule.parse({ verb: "itx.whatsapp.sendMessage" });
 const waits = { digest: "d".repeat(64), text: "{}", at: 1, until: 2, waited: false };
+const waiting = {
+  digest: waits.digest,
+  act: "itx.whatsapp.sendMessage",
+  summary: "itx.whatsapp.sendMessage",
+  at: 1,
+  until: 2,
+};
 
 /** The boundary's calls of the gate, as Workers RPC answers them: each answer holds its call's
  *  session open until its disposer runs. */
@@ -136,6 +146,7 @@ function pretendGate() {
     egress: {
       actRules: async () => held({ locked: false, rules: [rule] }),
       heldActs: async () => held([waits]),
+      waiting: async () => held({ acts: [waiting], rules: [], requests: [] }),
       setActRules: async () => held({ rules: [rule], facts }),
       proposeActRule: async () => held({ id: "p1", facts }),
       proposeStatement: async () => held({ draft: "d0", signAt: "", expires: 0 }),

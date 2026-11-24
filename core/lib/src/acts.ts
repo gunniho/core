@@ -25,6 +25,24 @@ export const RULE_PROPOSAL_SIGNED = "events.iterate.com/approval/rule-proposal-s
 export const GATE_LOCKED = "events.iterate.com/approval/locked";
 export const GATE_UNLOCKED = "events.iterate.com/approval/unlocked";
 
+/** WHAT WAITS FOR A MEMBER'S PASSKEY OR DEVICE KEY NOW, the one that waited longest first in each
+ *  list. `acts`: the mail and the calls the gate holds; `summary` is the line the `act-held` fact
+ *  has. `rules`: the rules the mind's code proposed, for a verb or for a request with a secret.
+ *  `requests`: the requests a secret holds, by method and host. `until`: when it can no longer be
+ *  approved. No row holds the text a member signs for: `heldActs` and the page have it. */
+export type Waiting = {
+  acts: { digest: string; act: string; summary: string; at: number; until: number; from?: string }[];
+  rules: { id: string; at: number; verb?: string; secret?: string; from?: string }[];
+  requests: {
+    digest: string;
+    secret: string;
+    summary: string;
+    at: number;
+    until: number;
+    from?: string;
+  }[];
+};
+
 /** On the vault's answer to an approval, for the boundary alone, which removes it: the ids of the
  *  acts that a member approved after their caller stopped waiting, with commas between. An id is
  *  64 characters, and an act's text may be 1 MiB, which no header carries: the boundary reads each

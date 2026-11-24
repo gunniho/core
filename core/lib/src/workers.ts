@@ -1,5 +1,5 @@
 // Types, and the few names two Workers must share: no Worker imports another Worker's code.
-import type { ActRule, GateAnswer } from "./acts.ts";
+import type { ActRule, GateAnswer, Waiting } from "./acts.ts";
 import type {
   ControlPlaneSessionApi,
   SecretBodyField,
@@ -109,6 +109,7 @@ export interface Door {
   act: SecretsService["act"];
   actRules: SecretsService["actRules"];
   heldActs: SecretsService["heldActs"];
+  waiting: SecretsService["waiting"];
   setActRules: SecretsService["setActRules"];
   proposeActRule: SecretsService["proposeActRule"];
   /** Whether `email` is a member of the mind now, as the auth Worker knows it (`AuthService`). */
@@ -447,6 +448,9 @@ export interface SecretsService {
    *  hashes `text` itself and takes it only when the SHA-256, in hex, is `digest`: the mind's
    *  code relays this answer and may be hostile. */
   heldActs(): Promise<HeldActText[]>;
+  /** WHAT WAITS FOR A MEMBER NOW, WITH NO TEXT: everything `/secrets/approvals` asks a member to
+   *  decide, as one short row each (./acts.ts `Waiting`). For a reader that says that something waits, and how much. */
+  waiting(): Promise<Waiting>;
 }
 
 /** `until`: when the act can no longer be approved. `waited`: a caller waits for it now. */

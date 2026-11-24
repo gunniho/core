@@ -33,7 +33,7 @@ import type {
   UniversalGatewayOptions,
 } from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
-import type { ActRule } from "./acts.ts";
+import type { ActRule, Waiting } from "./acts.ts";
 import type { Principal } from "./principal.ts";
 import type { Envelope } from "./signed.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
@@ -2221,6 +2221,10 @@ export interface IterateContextApi {
    *  for code or an agent to ask for one. */
   approvals: {
     rules(): Promise<{ locked: boolean; rules: ActRule[] }>;
+    /** Everything that waits for a member's key now, as one short row each and with no text
+     *  (./acts.ts `Waiting`): the held mail and calls, the proposed rules, and the requests a
+     *  secret holds. For code that says that something waits, and how much. */
+    waiting(): Promise<Waiting>;
     setRules(rules: ActRule[]): Promise<ActRule[]>;
     /** With `secret`, a rule for a request with that secret is proposed: the mind's code sets no
      *  such rule, and a member signs the proposal into one or rejects it. */

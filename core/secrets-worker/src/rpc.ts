@@ -5,7 +5,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { releasedAnswer } from "iterate/lib";
 import { SECRET_PATH, SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import type { SecretsService, SecretVerb, SecretVerbs } from "iterate/workers";
-import { SET } from "./approvals-index.ts";
+import { INDEX, SET } from "./approvals-index.ts";
 import { cloudOffered } from "./cloud-client.ts";
 import type { Env } from "./env.ts";
 import { refreshBrokeredGrants } from "./grant-refresh.ts";
@@ -14,6 +14,7 @@ import { actsGate, secretObject } from "./objects.ts";
 import { listSetSecrets } from "./secret-list.ts";
 import { cloudOriginOf } from "./secrets.ts";
 import { STACK_SECRET_PATHS } from "./stack-secrets.ts";
+import { waitingOf } from "./waiting.ts";
 
 export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   fetch(request: Parameters<SecretsService["fetch"]>[0]) {
@@ -107,6 +108,20 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
         from,
         waited,
       }));
+  }
+
+  // The page's own reading of what waits (./approvals-page.ts `page`), with no text: the gate's
+  // acts and proposed rules, and the requests of each secret the index names.
+  async waiting() {
+    const paths = await this.env.APPROVALS.getByName(INDEX).paths();
+    const secrets = await Promise.all(
+      paths.map(async (path) => {
+        // copied and let go at once: one call of this Worker asks many objects
+        const { held } = await releasedAnswer(secretObject(this.env, path).approvals(path));
+        return { path, held };
+      }),
+    );
+    return waitingOf({ gate: await actsGate(this.env).state(), secrets }, Date.now());
   }
 }
 
