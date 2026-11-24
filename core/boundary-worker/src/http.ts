@@ -14,6 +14,7 @@ import { isControlPlaneHostname, type MindConfig } from "iterate/mind-config";
 import { MIND_IDENTITY_PATH } from "iterate/mind-identity-log";
 import { ITERATE_CAUSE_HEADER, ITX_OWN_HEADER } from "iterate/lib";
 import { withoutOutsidePlaceholders } from "iterate/secret-placeholder";
+import { pageFaviconRedirect } from "iterate/standalone-page";
 import type { MindTarget } from "iterate/workers";
 import { boundaryConfigOf } from "./config.ts";
 import { controlPlaneApiResponse, isWebSocketUpgrade } from "./control-plane-api.ts";
@@ -93,6 +94,8 @@ export async function boundaryResponse(
       mind.fetch(own ? ownStamped(forwarded, request) : forwarded),
     );
   const url = new URL(request.url);
+  const icon = pageFaviconRedirect(request, url.pathname);
+  if (icon) return icon;
   const route = controlPlaneRouteOf(url);
   // THE API IS A SESSION THAT ENDS HERE (./control-plane-api.ts), and the mind gets none of its
   // socket. Under `/api/` the rest is the mind's, as before (a signed file URL, a webhook).

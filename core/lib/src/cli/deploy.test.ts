@@ -122,6 +122,7 @@ test("a new mind's config is the script's one input but for its id: the zone who
     appIds: ["ABCDE12345.com.example.app", "ABCDE12345.com.example.other"],
   });
   expect(deployConfigOf({ ...answers, appleApps: "none" }).apple).toBeUndefined();
+  expect(deployConfigOf({ ...answers, pageFavicon: "site" }).pageFavicon).toBe("site");
 });
 
 test("the control plane's hostname is the zone or one label under it, and nothing else", () => {
@@ -755,6 +756,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     },
     mail: { forwardTo: "team@group.example" },
     telemetry: { traceSampling: 0.25 },
+    pageFavicon: "site",
     apple: { appIds: ["ABCDE12345.com.example.app"] },
   });
   // every field of the script's config, nested ones too, is in this one: a new field fails here
@@ -805,6 +807,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     });
   };
   expect(overMind(whole)).toEqual(whole);
+  expect(ScriptConfig.parse(overMind(whole, { pageFavicon: "default" })).pageFavicon).toBeUndefined();
   expect(ScriptConfig.parse(overMind(whole))).toEqual(whole);
   // a field that this command does not know survives too
   const later = { ...whole, later: true, cloudflare: { ...whole.cloudflare, later: 1 } };

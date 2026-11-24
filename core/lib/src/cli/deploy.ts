@@ -85,6 +85,7 @@ export type DeployInput = {
   traceSampling?: string;
   /** the owner's Apple apps that ask for a passkey, with commas; `none` removes them */
   appleApps?: string;
+  pageFavicon?: "site" | "default";
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
@@ -160,6 +161,7 @@ export function deployConfigOf(answers: {
   mailForwardTo?: string;
   traceSampling?: string;
   appleApps?: string;
+  pageFavicon?: "site" | "default";
   deployed?: DeployedMind;
 }) {
   const { deployed } = answers;
@@ -218,6 +220,9 @@ export function deployConfigOf(answers: {
   const appIds = answers.appleApps?.split(",").map((id) => id.trim());
   return {
     ...kept,
+    ...(answers.pageFavicon && {
+      pageFavicon: answers.pageFavicon === "site" ? "site" : undefined,
+    }),
     apple: answers.appleApps === "none" ? undefined : appIds ? { appIds } : kept?.apple,
     mail: forwardTo === "none" ? undefined : forwardTo ? { forwardTo } : kept?.mail,
     // the trace sampling is what the flag says, else what the mind has; `default` keeps every trace
@@ -2118,6 +2123,7 @@ export async function deployMind(input: DeployInput) {
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
       appleApps: input.appleApps,
+      pageFavicon: input.pageFavicon,
       deployed: mind,
     });
     const { controlPlaneHostname } = config;

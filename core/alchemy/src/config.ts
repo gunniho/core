@@ -64,6 +64,8 @@ export const MindConfig = z
      *  (https://developers.cloudflare.com/workers/observability/traces/). Log lines are always
      *  kept whole. Absent: 1, every trace. `iterate deploy --trace-sampling` sets it. */
     telemetry: z.strictObject({ traceSampling: z.number().min(0).max(1) }).optional(),
+    /** Read the primary site's /favicon.svg at deploy time for the stack's own browser pages. */
+    pageFavicon: z.literal("site").optional(),
     /** THE OWNER'S OWN APPLE APPS THAT ASK FOR A PASSKEY OF THE MIND, each as
      *  `<team id>.<bundle id>`. The auth Worker lists them at
      *  `/.well-known/apple-app-site-association` (`webcredentials`), so iOS lets each show the
