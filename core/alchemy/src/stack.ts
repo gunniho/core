@@ -40,6 +40,7 @@ import { ArtifactsNamespace } from "./artifacts-namespace.ts";
 import { ArtifactsRepoSubscription } from "./artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
 import { type MindConfig, namesOf } from "./config.ts";
+import { pageFaviconBuild } from "./page-favicon.ts";
 import { bindAnalyticsSql } from "./analytics-sql-binding.ts";
 import { MindMadeTelemetryTables, telemetryTableNames } from "./mind-made-telemetry-tables.ts";
 import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
@@ -84,6 +85,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
   Effect.gen(function* () {
     const names = namesOf(config);
     const { accountId, zones } = config.cloudflare;
+    const pageBuild = config.pageFavicon === "site"
+      ? { build: yield* Effect.promise(() => pageFaviconBuild(zones[0], config.controlPlaneHostname)) }
+      : {};
     const mindIsInTheStack = config.topology === "full-cloudflare";
     const telemetryMode = options.telemetryMode || "given";
     // the share of requests whose trace Cloudflare keeps: every one unless the config says less
@@ -330,6 +334,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // ── auth ──
     const auth = yield* Cloudflare.Worker("Auth", {
       ...sharedWorkerProps,
+      ...pageBuild,
       name: names.auth,
       main: core("auth-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC, ML_DSA] },
@@ -390,6 +395,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // ── secrets ──
     const secrets = yield* Cloudflare.Worker("Secrets", {
       ...sharedWorkerProps,
+      ...pageBuild,
       name: names.secrets,
       main: core("secrets-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE, flags: ["nodejs_compat", STRICTLY_PUBLIC] },
@@ -426,6 +432,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // ── the boundary: one build, and one binding to the mind by the topology ──
     const declaredBoundary = Cloudflare.Worker("Boundary", {
       ...sharedWorkerProps,
+      ...pageBuild,
       name: names.boundary,
       main: core("boundary-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE, flags: [STRICTLY_PUBLIC] },

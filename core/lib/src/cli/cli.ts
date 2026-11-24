@@ -265,6 +265,10 @@ const launcherProcedures = {
           .describe(
             "Your own Apple apps that may ask for a passkey of the mind, each <team id>.<bundle id>, with commas between: the mind lists them in its Apple association file, and each is trusted as the sign page is, to show what a passkey signs; none removes them (default: none; for a mind that is there already: the ones it has)",
           ),
+        pageFavicon: z
+          .enum(["site", "default"])
+          .optional()
+          .describe("Use the primary site's /favicon.svg on the stack's browser pages, or restore the default Iterate icon. A later deploy keeps the selection and refreshes the artwork."),
         buy: z
           .boolean()
           .optional()

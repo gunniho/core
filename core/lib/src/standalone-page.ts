@@ -19,9 +19,26 @@ const MARK = `<div class="mark" aria-hidden="true"><svg viewBox="0 0 500 500" xm
  *  holds an icon as it holds an image: a page with a policy allows `img-src data:`
  *  (`PLAIN_PAGE_ICON_SRC`). A `data:` image reaches no server. */
 export const PLAIN_PAGE_ICON_SRC = "data:";
+// The stack build supplies this constant when the owner selects the site's favicon.
+declare const __ITERATE_PAGE_FAVICON__: { origin: string; svg: string } | undefined;
+const siteFavicon = typeof __ITERATE_PAGE_FAVICON__ === "undefined" ? undefined : __ITERATE_PAGE_FAVICON__;
 const ICON = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(
-  `<svg viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="112" fill="#000"/>${GLYPH.replace("<g ", '<g fill="#fff" ')}</svg>`,
+  siteFavicon?.svg ??
+    `<svg viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg"><rect width="500" height="500" rx="112" fill="#000"/>${GLYPH.replace("<g ", '<g fill="#fff" ')}</svg>`,
 )}">`;
+
+/** Browsers also ask the control plane for its icon directly, including the implicit favicon
+ *  of the MCP help page. Only the fixed public path belongs on the redirect to the site. */
+export function pageFaviconRedirect(request: Request, pathname: string): Response | null {
+  if (!siteFavicon || (request.method !== "GET" && request.method !== "HEAD") || request.headers.has("upgrade"))
+    return null;
+  if (pathname !== "/favicon.ico" && pathname !== "/favicon.svg" && pathname !== "/apple-touch-icon.png")
+    return null;
+  return new Response(null, {
+    status: 302,
+    headers: { location: siteFavicon.origin + pathname, "referrer-policy": "no-referrer" },
+  });
+}
 
 /** The whole document. `title` is text, escaped here; `head` and `body` are HTML, so a caller
  *  escapes what it did not write in them. `head` is what the head carries beyond the title and the
