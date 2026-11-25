@@ -2,6 +2,7 @@
 // the person and from Cloudflare. A JSON file, named in ITERATE_MIND_CONFIG. No field is optional
 // for a reason of history, and no variable of the environment changes what it means.
 import { readFileSync } from "node:fs";
+import { domainOfOwnerEmailPattern, OwnerEmailPattern } from "iterate/mind-config";
 import { z } from "zod";
 
 const hostname = z
@@ -22,6 +23,14 @@ export const MindConfig = z
      *  with a code mailed to that address and then adds a passkey. An owner may remove another
      *  member's passkeys. Members added later are in the mind, not here. */
     ownerEmails: z.array(z.email().toLowerCase()).min(1),
+    /** MORE OWNERS, BY PATTERN: each `*@<domain>` makes every address at exactly that domain an
+     *  owner, with all that an owner may do (iterate/mind-config `isOwnerEmail`). Such a person
+     *  proves the address through Cloudflare Access, as any owner does, and then adds a passkey:
+     *  so whoever holds a mailbox at the domain, or runs its mail, can become an owner. Name a
+     *  domain only when its mail is the company's own. A person who left keeps the passkey they
+     *  added: an owner's block of that address on `/members` ends that one person
+     *  (core/auth-worker/src/members.ts `isMember`). Absent: no pattern. */
+    ownerEmailPatterns: z.array(OwnerEmailPattern).optional(),
     /** Where the mind Worker runs: in the stack, or elsewhere, connecting in through the
      *  boundary. */
     topology: z.enum(["full-cloudflare", "external-mind-connects-into-cloudflare-boundary"]),
@@ -52,10 +61,10 @@ export const MindConfig = z
        *  Absent: no binding, and the platform's fetch sends. */
       egressGatewayWorker: z.string().min(1).optional(),
     }),
-    /** A FORWARD BY THE STACK, beside the config's own `email` method (iterate/sdk), where a
-     *  mind's config forwards. Absent: the config's `email` alone decides where a mail goes. `forwardTo`:
-     *  each mail is also forwarded there as it arrived (a team's mailbox or group), before the
-     *  config's `email` runs. The address must be a verified destination address of the
+    /** A FORWARD BY THE STACK, beside the forwards that the mind's config asks for by event
+     *  (iterate/email `email/forward-requested`). Absent: the config's requests alone decide
+     *  where a mail goes. `forwardTo`: each mail is also forwarded there as it arrived (a team's
+     *  mailbox or group), before the config's requests. The address must be a verified destination address of the
      *  account's Email Routing, which a person confirms once by the link Cloudflare mails to it. */
     mail: z.strictObject({ forwardTo: z.email() }).optional(),
     /** THE MIND'S TELEMETRY in Cloudflare's own store. `traceSampling` is the share of requests
@@ -106,6 +115,18 @@ export const MindConfig = z
     {
       path: ["ownerEmails"],
       error: "no address at a zone of the mind: the mind takes that mail",
+    },
+  )
+  .refine(
+    ({ ownerEmailPatterns, cloudflare }) =>
+      (ownerEmailPatterns || []).every((pattern) =>
+        cloudflare.zones.every(
+          (zone) => !`.${domainOfOwnerEmailPattern(pattern)}`.endsWith(`.${zone}`),
+        ),
+      ),
+    {
+      path: ["ownerEmailPatterns"],
+      error: "no pattern at a zone of the mind: the mind takes that mail",
     },
   )
   .refine(

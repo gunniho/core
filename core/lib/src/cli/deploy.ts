@@ -37,13 +37,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual, promisify, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { mindAddressAsTyped } from "../mind-api.ts";
+import { mindAddressAsTyped, mindApiUrlOf, mindMcpNameOf, mindMcpUrlOf } from "../mind-api.ts";
 import {
+  domainOfOwnerEmailPattern,
   Hostname,
   MindConfig,
+  OwnerEmailPattern,
   zoneCoversControlPlaneHostname,
+  zoneOf as zoneOfMind,
   zoneOfMailAddress,
 } from "../mind-config.ts";
+import { discoveredMind, signInToMind } from "../node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
   type Answer,
@@ -51,6 +55,7 @@ import {
   cloudflare,
   cloudflareAccess,
   DEPLOY_SCOPES,
+  dropKeptAccess,
   endAccess,
   SIGN_IN_ENDED_EXIT,
   SIGN_IN_FILE,
@@ -58,6 +63,14 @@ import {
   parsed,
   resultOf,
 } from "./cloudflare-access.ts";
+import {
+  DEFAULT_CONFIG_NAME,
+  readConfigFile,
+  readSession,
+  setConfigMind,
+  withSessionsLock,
+  writeSession,
+} from "./config.ts";
 import { loginFlowFor } from "./device-login/flow.ts";
 import {
   IDENTITIES,
@@ -67,6 +80,14 @@ import {
   newIdentity,
   postIdentity,
 } from "./identity.ts";
+import {
+  addMcpServer,
+  MCP_CLIENTS,
+  type McpClient,
+  mcpClientsOf,
+  mcpClientsOnPath,
+} from "./mcp-clients.ts";
+import { refreshOAuthSession } from "./oauth.ts";
 import { openPageCommand } from "./open-page.ts";
 
 const exec = promisify(execFile);
@@ -76,7 +97,11 @@ export type DeployInput = {
   domain?: string;
   account?: string;
   newAccount?: boolean;
+  newSignIn?: boolean;
   owner?: string;
+  /** more owners by pattern, `*@<domain>` with commas between; `none` takes them away
+   *  (`deployConfigOf`) */
+  ownerEmailPatterns?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
@@ -92,6 +117,10 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
+  /** false: this computer is not signed in to the mind after the deploy (`signInHere`) */
+  signIn?: boolean;
+  /** the coding agents that get the mind's MCP server: names, `all` or `none` (`addMcpHere`) */
+  mcp?: string;
   /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
   plan?: boolean;
 };
@@ -146,7 +175,8 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  what a flag said, and each replaces what the mind has. So does `mailForwardTo`, the config's
  *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward. So does
  *  `traceSampling`, the config's `telemetry.traceSampling` (a number from 0 to 1), and `default`
- *  there removes it, so that every trace is kept.
+ *  there removes it, so that every trace is kept. So does `ownerEmailPatterns`, the config's
+ *  field of that name (`*@<domain>`, commas or spaces between), and `none` there removes it.
  *
  *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
  *  another. A mind with none gets the hash of the genesis that the command signs right before
@@ -156,6 +186,7 @@ export function deployConfigOf(answers: {
   domain: string;
   owner?: string;
   extraOwners?: readonly string[];
+  ownerEmailPatterns?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
@@ -192,6 +223,24 @@ export function deployConfigOf(answers: {
   if (!z.array(z.email()).min(1).safeParse(ownerEmails).success)
     throw new Error(
       `The owner is an email address, and ${ownerEmails.join(", ") || "none"} is not.`,
+    );
+  // an empty flag is an error, never "no patterns" by accident
+  const patterns = answers.ownerEmailPatterns;
+  if (patterns === "")
+    throw new Error(
+      "--owner-email-patterns is empty: give *@<domain>, or none to take the patterns away.",
+    );
+  const named = !patterns || patterns === "none" ? [] : [...new Set(patterns.split(/[\s,]+/))];
+  if (named.some((pattern) => !OwnerEmailPattern.safeParse(pattern).success))
+    throw new Error(
+      `--owner-email-patterns ${patterns}: each pattern is *@<domain> in lower case, with one comma between two, or none to take the patterns away.`,
+    );
+  const patternAtTheMind = named.find((pattern) =>
+    zoneOfMind({ zones }, domainOfOwnerEmailPattern(pattern)),
+  );
+  if (patternAtTheMind)
+    throw new Error(
+      `The owner email pattern ${patternAtTheMind} is at a domain of the mind, and the mind takes that domain's mail. Name a domain elsewhere.`,
     );
   // a mind that is there starts from its deploy's whole config: only what a flag names changes
   const kept = deployed?.deployConfig;
@@ -232,6 +281,8 @@ export function deployConfigOf(answers: {
     mindId: deployed?.mindId,
     controlPlaneHostname,
     ownerEmails,
+    // the patterns are what the flag says, else what the mind has; `none` takes them away
+    ...(patterns && { ownerEmailPatterns: named.length ? named : undefined }),
     topology: deployed?.topology || ("full-cloudflare" as const),
     alchemy: { ...kept?.alchemy, stageName: deployed?.stageName || stageNameOf(answers.domain) },
     cloudflare: {
@@ -636,6 +687,25 @@ export function setupDestinationOf(mind: {
   return { url, prompt };
 }
 
+/** THE PAGE THAT SIGNS THIS COMPUTER IN TO THE MIND, from the issuer's own page for it (the
+ *  browser flow's authorization request, or the device flow's approval page with its code). A new
+ *  mind's owner has no passkey to approve it with yet, so on a first deploy the way there goes
+ *  through `/sign-in/access`: Cloudflare Access proves the owner's email, the owner adds their
+ *  first passkey, and the browser goes on to the issuer's page as `next`, signed in
+ *  (core/auth-worker/src/access-sign-in.ts, enrolment.ts). On a redeploy the issuer's page is the
+ *  way: it asks a browser that is not signed in for its passkey first. */
+export function signInPageOf(
+  mind: { controlPlaneHostname: string; firstDeploy: boolean },
+  issuerPage: string,
+) {
+  if (!mind.firstDeploy) return issuerPage;
+  return `https://${mind.controlPlaneHostname}/sign-in/access?${new URLSearchParams({ next: issuerPage })}`;
+}
+
+/** How long the sign-in after a deploy waits for the person: a new owner reads a mailed code and
+ *  adds a passkey on the way. */
+const SIGN_IN_WAIT_MS = 30 * 60_000;
+
 /** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
  *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
  *  proves their address through Cloudflare Access, which needs the organization
@@ -675,6 +745,8 @@ export function zeroTrustStep(account: string, answer: Answer, tried: boolean) {
 export const erateOf = (word: string) =>
   `${word.length > 1 ? word.replace(/[aeiouy]$/, "") : word}erate`;
 
+const domainEndings = ["com", "dev", "net", "xyz"] as const;
+
 /** Names a person might like, from their name and a few words, 20 at most: what one question to
  *  Cloudflare's registrar takes. The "erate" names of their first and last name come first, as
  *  .com and .dev; then the other names, .com first. */
@@ -701,9 +773,7 @@ export function candidatesOf(name: string, words = ""): string[] {
     stems.add(word);
     if (first) stems.add(`${first}${word}`);
   }
-  const others = [...stems].flatMap((stem) =>
-    ["com", "dev", "net", "xyz"].map((ending) => `${stem}.${ending}`),
-  );
+  const others = [...stems].flatMap((stem) => domainEndings.map((ending) => `${stem}.${ending}`));
   const erate = [first, last].flatMap((word) => (word ? [erateOf(word)] : []));
   return [
     ...new Set([
@@ -712,6 +782,31 @@ export function candidatesOf(name: string, words = ""): string[] {
       ...others.filter((domain) => !domain.endsWith(".com")),
     ]),
   ].slice(0, 20);
+}
+
+/** Candidate names made from a taken domain's stem, reusing `candidatesOf`: first the stem's own
+ *  other endings, then `candidatesOf` on the stem's words, without the taken domain itself, 20 at
+ *  most. */
+export function alternativesOf(domain: string): string[] {
+  const lower = domain.toLowerCase();
+  const stem = lower.split(".")[0] || "";
+  if (!stem) return [];
+  const endings = domainEndings.map((ending) => `${stem}.${ending}`);
+  return [...new Set([...endings, ...candidatesOf(stem.replaceAll("-", " "))])]
+    .filter((candidate) => candidate !== lower)
+    .slice(0, 20);
+}
+
+/** Instructions for turning on Workers Paid. When this run just created the account, Cloudflare's
+ *  dashboard can briefly say "not authorized" until the new account propagates. */
+export function workersPaidPrompt(created: boolean) {
+  const lines = [
+    "Turn on Workers Paid ($5 a month). It only counts after you press Purchase, and your bank may ask to confirm the payment.",
+    "If Cloudflare declines a card on a new account, try another card or an account you already have.",
+  ];
+  if (created)
+    lines.push("If Cloudflare's page says you are not authorized, wait a minute and reload.");
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -811,10 +906,11 @@ async function until<T>(
   title: string,
   check: () => Promise<T | undefined | false | null>,
   minutes = 30,
+  pause: (ms: number) => Promise<unknown> = sleep,
 ): Promise<T> {
   const waiting = wait(title);
   let failure = "";
-  for (const end = Date.now() + minutes * 60_000; Date.now() < end; await sleep(3000)) {
+  for (const end = Date.now() + minutes * 60_000; Date.now() < end; await pause(3000)) {
     const got = await check().catch((error: unknown) => {
       if (error instanceof Stop) {
         waiting.fail();
@@ -1189,7 +1285,12 @@ export async function deployStack<
 const Account = z.object({ id: z.string(), name: z.string() });
 type Account = z.infer<typeof Account>;
 const Membership = z.object({ status: z.string().optional(), account: Account.optional() });
-const ZoneRow = z.object({ id: z.string(), name: z.string(), status: z.string() });
+const ZoneRow = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.string(),
+  name_servers: z.array(z.string()).optional(),
+});
 /** A zone, and the stage of the mind whose boundary Worker its routes name, when one does. */
 type Zone = z.infer<typeof ZoneRow> & {
   stageName?: string;
@@ -1301,14 +1402,14 @@ async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promis
       await cf("GET", `/zones?account.id=${account}&per_page=50${which}`),
     ) ?? [];
   return Promise.all(
-    zones.map(async ({ id, name, status }) => {
+    zones.map(async ({ id, name, status, name_servers }) => {
       const [routes, records] = await Promise.all([
         cf("GET", `/zones/${id}/workers/routes`).then((answer) => resultOf(z.array(Route), answer)),
         cf("GET", `/zones/${id}/dns_records?per_page=100`).then((answer) =>
           resultOf(z.array(DnsRecord), answer),
         ),
       ]);
-      if (!routes || !records) return { id, name, status, unread: true };
+      if (!routes || !records) return { id, name, status, name_servers, unread: true };
       const stack = /^iterate-(.+)-boundary$/;
       const uses = [
         ...routes
@@ -1325,6 +1426,7 @@ async function zonesOf(cf: Cloudflare, account: string, domain?: string): Promis
         id,
         name,
         status,
+        name_servers,
         stageName: routes.map((route) => stack.exec(route.script || "")?.[1]).find(Boolean),
         uses,
       };
@@ -1408,21 +1510,49 @@ export function domainPickerOptions(input: {
   return options;
 }
 
+type PickDomainUi = {
+  select: (args: {
+    message: string;
+    maxItems: number;
+    initialValue: string | undefined;
+    options: DomainPickerOption[];
+  }) => Promise<string>;
+  text: (args: {
+    message: string;
+    validate: (value: string | undefined) => string | undefined;
+  }) => Promise<string>;
+  confirm: (flag: string, message: string) => Promise<boolean>;
+  warn: (message: string) => void;
+};
+
 /** The domain, and how the account gets it: a new one to buy, a zone the account has, or one to
  *  add. With no `--domain`, the person picks from one unified list with "Buy a brand new domain"
  *  at the top (including entering a brand new domain name to buy) and "Use an existing cloudflare
  *  zone" below. `person` is the name the initial candidates are made from. */
-async function pickDomain(
+export async function pickDomain(
   cf: Cloudflare,
   account: string,
   input: DeployInput,
   zones: Zone[],
   person: string,
+  {
+    select = (opts) => ask<string>("pass --domain <domain>", () => p.select(opts)),
+    text = (opts) => ask<string>("pass --domain <domain>", () => p.text(opts)),
+    confirm = (flag, message) => ask<boolean>(flag, () => p.confirm({ message })),
+    warn = (message) => p.log.warn(message),
+  }: Partial<PickDomainUi> = {},
 ): Promise<Pick> {
-  const free = async (words?: string) =>
-    (await offersOf(cf, account, candidatesOf(person, words))).filter((offer) => offer.registrable);
-  let offers = input.domain ? [] : await free();
+  const free = async (domains: string[]) =>
+    (await offersOf(cf, account, domains)).filter((offer) => offer.registrable);
+  let offers = input.domain ? [] : await free(candidatesOf(person));
   let maxOffers = 6;
+  const addOffers = async (domains: string[], from: string) => {
+    const more = await free(domains);
+    if (more.length === 0) warn(`No name from "${from}" is free at Cloudflare.`);
+    // the new names first, then the ones from before
+    offers = [...more, ...offers.filter((old) => more.every((now) => now.name !== old.name))];
+    maxOffers = 8;
+  };
   for (;;) {
     const options = domainPickerOptions({
       offers,
@@ -1433,33 +1563,25 @@ async function pickDomain(
     const firstSelectable = options.find((option) => !option.disabled)?.value;
     let domain =
       input.domain?.toLowerCase() ||
-      (await ask<string>("pass --domain <domain>", () =>
-        p.select({
-          message:
-            "Which domain does the mind live at? It takes the whole domain: its site, its mail and its sign-in.",
-          maxItems: 16,
-          initialValue: firstSelectable,
-          options,
-        }),
-      ));
+      (await select({
+        message:
+          "Which domain does the mind live at? It takes the whole domain, so the mind can be its site, mail and apps.",
+        maxItems: 16,
+        initialValue: firstSelectable,
+        options,
+      }));
     if (domain === ENTER_NEW_DOMAIN) {
       const typed = (
-        await ask<string>("pass --domain <domain>", () =>
-          p.text({
-            message:
-              "Enter a brand new domain name to buy (e.g. ada-labs.com), or a few words for more ideas",
-            validate: (value) => (value?.trim() ? undefined : "A domain, or a few words"),
-          }),
-        )
+        await text({
+          message:
+            "Enter a brand new domain name to buy (e.g. ada-labs.com), or a few words for more ideas",
+          validate: (value) => (value?.trim() ? undefined : "A domain, or a few words"),
+        })
       )
         .trim()
         .toLowerCase();
       if (!Hostname.safeParse(typed).success) {
-        const more = await free(typed);
-        if (more.length === 0) p.log.warn(`No name from "${typed}" is free at Cloudflare.`);
-        // the new names first, then the ones from before
-        offers = [...more, ...offers.filter((old) => more.every((now) => now.name !== old.name))];
-        maxOffers = 8;
+        await addOffers(candidatesOf(person, typed), typed);
         continue;
       }
       domain = typed;
@@ -1478,23 +1600,23 @@ async function pickDomain(
       // after every other check, when the deploy needs the zone (`zoneOf`).
       const buy =
         input.buy ||
-        (await ask<boolean>(`${domain} costs ${priceOf(offer)}; pass --buy to buy it`, () =>
-          p.confirm({
-            message: `Buy ${domain} at Cloudflare for ${priceOf(offer)}? Cloudflare charges the account's payment method, and a registration is not refunded.`,
-          }),
+        (await confirm(
+          `${domain} costs ${priceOf(offer)}; pass --buy to buy it`,
+          `Buy ${domain} at Cloudflare for ${priceOf(offer)}? Cloudflare charges the account's payment method, and a registration is not refunded.`,
         ));
       if (buy) return { domain, offer };
     } else {
       const theirs =
         input.yes ||
-        (await ask<boolean>(
+        (await confirm(
           `${domain} is not for sale at Cloudflare; pass --yes when it is yours at another registrar`,
-          () =>
-            p.confirm({
-              message: `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then add it to this account and set its nameservers to Cloudflare's.`,
-            }),
+          `${domain} is not for sale at Cloudflare. Is it yours at another registrar? You then add it to this account and set its nameservers to Cloudflare's.`,
         ));
       if (theirs) return { domain };
+      if (input.domain)
+        throw new Error(`Run the command again with another domain than ${domain}.`);
+      await addOffers(alternativesOf(domain), domain);
+      continue;
     }
     // a no to a domain that a flag named has no other answer; a person picks again
     if (input.domain) throw new Error(`Run the command again with another domain than ${domain}.`);
@@ -1588,7 +1710,15 @@ async function buyDomain(cf: Cloudflare, account: string, domain: string, offer:
  *  it, or the person adds it on Cloudflare's own page (the command holds no right to add a zone),
  *  and this waits for it. A domain bought at Cloudflare becomes a zone of the account by
  *  itself. */
-async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone> {
+export async function zoneOf(
+  cf: Cloudflare,
+  account: string,
+  pick: Pick,
+  {
+    say = (line: string) => p.log.info(line),
+    pause = sleep,
+  }: { say?: (line: string) => void; pause?: (ms: number) => Promise<unknown> } = {},
+): Promise<Zone> {
   const { domain } = pick;
   const found = async (): Promise<Zone | undefined> =>
     resultOf(z.array(ZoneRow), await cf("GET", `/zones?name=${domain}&account.id=${account}`))?.[0];
@@ -1601,18 +1731,34 @@ async function zoneOf(cf: Cloudflare, account: string, pick: Pick): Promise<Zone
         `https://dash.cloudflare.com/${account}/add-site`,
       );
     // a purchase takes minutes; nameservers at another registrar can take a day
-    zone = await until(`Waiting for ${domain} in the account`, found, pick.offer ? 60 : 24 * 60);
+    zone = await until(
+      `Waiting for ${domain} in the account`,
+      found,
+      pick.offer ? 60 : 24 * 60,
+      pause,
+    );
   }
   if (zone.status === "active") return zone;
+  let printedNameservers = false;
+  const showNameservers = (target: Zone) => {
+    if (printedNameservers || pick.offer || !target.name_servers?.length) return;
+    printedNameservers = true;
+    say(
+      `Set ${domain}'s nameservers at your registrar to:\n  ${target.name_servers.join("\n  ")}\nTurn DNSSEC off at your current registrar before changing nameservers.`,
+    );
+  };
+  showNameservers(zone);
   const { id } = zone;
   return until(
     `Waiting for Cloudflare to activate ${domain}`,
     async () => {
       const now = resultOf(ZoneRow, await cf("GET", `/zones/${id}`));
       if (now?.status === "active") return now;
+      if (now) showNameservers(now);
       return undefined;
     },
     pick.offer ? 30 : 24 * 60,
+    pause,
   );
 }
 
@@ -1624,7 +1770,7 @@ async function pickAccount(
   cf: Cloudflare,
   input: DeployInput,
   owner: () => Promise<string>,
-): Promise<{ account: Account; covered: boolean }> {
+): Promise<{ account: Account; covered: boolean; created: boolean }> {
   const NEW = "\0new";
   const { all, covered } = await accountsOf(cf);
   let chosen = input.newAccount ? NEW : input.account;
@@ -1643,7 +1789,7 @@ async function pickAccount(
         {
           value: NEW,
           label: "A new account for this mind",
-          hint: "keeps it apart from what you have; Cloudflare allows five extra, and only you can delete one",
+          hint: "one Cloudflare login can own several accounts; a new one is a clean, separate place for the mind (up to five extra)",
         },
       ],
     }),
@@ -1651,12 +1797,12 @@ async function pickAccount(
   const isCovered = (account: Account) => covered.some((candidate) => candidate.id === account.id);
   if (chosen !== NEW) {
     const account = all.find((candidate) => candidate.id === chosen || candidate.name === chosen);
-    if (account) return { account, covered: isCovered(account) };
+    if (account) return { account, covered: isCovered(account), created: false };
     // an account beyond the first 50 is not in the list: its id still names it
     const byId = /^[0-9a-f]{32}$/.test(chosen)
       ? resultOf(Account, await cf("GET", `/accounts/${chosen}`))
       : undefined;
-    if (byId) return { account: byId, covered: true };
+    if (byId) return { account: byId, covered: true, created: false };
     throw new Error(
       `You have no Cloudflare account ${JSON.stringify(chosen)}. This access covers: ${covered.map((a) => `${c.account(a.name)} (${a.id})`).join(", ") || "none"}.`,
     );
@@ -1664,7 +1810,7 @@ async function pickAccount(
   // an earlier run made it: a second run makes no second account
   const fresh = `iterate-${(await owner()).split("@")[0]!.replace(/[^a-z0-9]+/g, "-")}`;
   const before = all.find((candidate) => candidate.name === fresh);
-  if (before) return { account: before, covered: isCovered(before) };
+  if (before) return { account: before, covered: isCovered(before), created: false };
   const made = await cf("POST", "/accounts", { name: fresh, standalone: true });
   const account = resultOf(Account, made);
   if (!account)
@@ -1674,7 +1820,11 @@ async function pickAccount(
   p.log.success(`Made the Cloudflare account ${c.account(fresh)}.`);
   // a sign-in's approval names the accounts it covers, so not this one; a token for all of the
   // person's accounts reaches it at once
-  return { account, covered: (await cf("GET", `/accounts/${account.id}`)).status === 200 };
+  return {
+    account,
+    covered: (await cf("GET", `/accounts/${account.id}`)).status === 200,
+    created: true,
+  };
 }
 
 /** THE MIND THAT IS DEPLOYED AS THE STAGE `stageName` OF THE ACCOUNT, with its own config, or
@@ -1860,6 +2010,129 @@ async function identityPublished(mind: { mindId: string; controlPlaneHostname: s
 // ---------------------------------------------------------------------------------------------
 // The command.
 
+/** THIS COMPUTER'S SIGN-IN TO THE MIND, ON THE WAY TO SETUP, so that `iterate` commands work
+ *  right after the deploy (cli.ts `login` does the same). In the browser flow the setup page is the
+ *  sign-in: the browser goes from the issuer's page (through the first passkey on a new mind,
+ *  `signInPageOf`) to this computer's loopback, which sends it on to `onboarding`. The device flow
+ *  prints its page instead, for a browser on another computer. A sign-in that fails ends nothing:
+ *  the deploy is done, and `iterate login` signs in later.
+ *
+ *  `opened`: a browser was sent toward setup, so no other page is opened. `signedIn`: the session
+ *  is stored. Nobody signs in when `--no-sign-in` says so, when there is no person and no coding
+ *  agent to pass the page on (a log in CI), or when a redeploy finds a sign-in kept here already. */
+async function signInHere(
+  input: DeployInput,
+  mind: {
+    controlPlaneHostname: string;
+    firstDeploy: boolean;
+    setup: { url: string; prompt: string };
+    onboarding: string;
+  },
+): Promise<{ opened: boolean; signedIn: boolean }> {
+  const c = palette();
+  const { controlPlaneHostname } = mind;
+  const resource = mindApiUrlOf(controlPlaneHostname);
+  if (input.signIn === false || (!interactive() && !isCodingAgent(process.env)))
+    return { opened: false, signedIn: false };
+  if (!mind.firstDeploy && (await keptSignInLives(resource)))
+    return { opened: false, signedIn: true };
+  const flow = signInFlow();
+  let opened = false;
+  let waiting: ReturnType<typeof wait> | undefined;
+  try {
+    const discovered = await discoveredMind(controlPlaneHostname);
+    await signInToMind(discovered, resource, {
+      flow,
+      // the device flow's page and code, on lines of their own; the first line names the issuer
+      print: (line) => {
+        if (!line.startsWith("Signing in to ")) console.log(line);
+      },
+      through: (page) => signInPageOf(mind, page),
+      then: mind.onboarding,
+      waitMs: SIGN_IN_WAIT_MS,
+      openBrowser: async (url) => {
+        await page(mind.setup.prompt, url.href);
+        opened = true;
+        waiting = wait("Waiting for you in the browser");
+      },
+    });
+    waiting?.done();
+    p.log.success(`This computer is signed in to ${c.domain(controlPlaneHostname)}.`);
+    // a computer with no mind yet takes this one; one with another mind already keeps it
+    const minds = Object.values(readConfigFile().configs || {}).map((profile) => profile.mind);
+    if (!minds.some(Boolean)) setConfigMind(DEFAULT_CONFIG_NAME, controlPlaneHostname);
+    else if (!minds.includes(controlPlaneHostname))
+      p.log.info(
+        `Your iterate commands still go to the mind they went to. Add --mind ${controlPlaneHostname} to reach this one.`,
+      );
+    return { opened, signedIn: true };
+  } catch (error) {
+    waiting?.fail();
+    p.log.warn(
+      `This computer is not signed in to the mind (${error instanceof Error ? error.message : String(error)}). Run ${c.callout(`iterate login ${controlPlaneHostname}`)} to sign in.`,
+    );
+    return { opened, signedIn: false };
+  }
+}
+
+/** Whether this computer's kept sign-in for `resource` still works: the issuer renews it now (a
+ *  stored token proves nothing once its grant was ended at the issuer). The renewed one is kept. */
+async function keptSignInLives(resource: string) {
+  return withSessionsLock(async () => {
+    const kept = readSession(resource);
+    if (!kept?.refreshToken) return false;
+    try {
+      writeSession(resource, await refreshOAuthSession({ resource, session: kept }));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** THE MIND'S MCP SERVER IN THE CODING AGENTS ON THIS COMPUTER (./mcp-clients.ts), on a first
+ *  deploy: the ones `--mcp` names, or with a person there, the ones they tick of those found
+ *  (all ticked). Each signs in itself on its first use. A redeploy asks nothing:
+ *  `iterate mcp <client>` adds it any time. */
+async function addMcpHere(input: DeployInput, mind: { controlPlaneHostname: string }) {
+  const found = mcpClientsOnPath();
+  const named = input.mcp ? mcpClientsOf(input.mcp, found) : null;
+  if (!named && (!interactive() || !found.length)) return;
+  const chosen =
+    named ||
+    (await ask<McpClient[]>("", () =>
+      p.multiselect<McpClient>({
+        message: `Let your coding agents work in the mind? This adds its MCP server to each one you tick.`,
+        options: found.map((client) => ({ value: client, label: MCP_CLIENTS[client].title })),
+        initialValues: found,
+        required: false,
+      }),
+    ));
+  const url = mindMcpUrlOf(mind.controlPlaneHostname);
+  const name = mindMcpNameOf(mind.controlPlaneHostname);
+  const added: McpClient[] = [];
+  for (const client of chosen) {
+    const result = addMcpServer(client, url);
+    if ("failed" in result)
+      p.log.warn(`${MCP_CLIENTS[client].title} did not take the MCP server: ${result.failed}`);
+    // another entry of that name, which may be another mind's, stays: this mind's is not added
+    else if ("kept" in result)
+      p.log.warn(
+        `${MCP_CLIENTS[client].title} has another server named ${name} already, and keeps it. To put this mind's in its place: ${MCP_CLIENTS[client].remove(name)}, then iterate mcp ${client} --exec --mind ${mind.controlPlaneHostname}`,
+      );
+    else added.push(client);
+  }
+  if (!added.length) return;
+  const titles = added.map((client) => MCP_CLIENTS[client].title);
+  const who =
+    titles.length > 1
+      ? `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)} have`
+      : `${titles[0]} has`;
+  p.log.success(
+    `${who} the mind's MCP server as ${name}. Sign each one in once:\n${added.map((client) => `${MCP_CLIENTS[client].title}: ${MCP_CLIENTS[client].signIn(name)}`).join("\n")}`,
+  );
+}
+
 /** Minimum Node version for `iterate deploy`: Node 24.7+ (ML-DSA-65 identity keys + modern TLS/fetch
  *  so Cloudflare OAuth does not reject older runtimes with HTTP 403 / fetch failed). */
 export const MIN_DEPLOY_NODE = [24, 7] as const;
@@ -1876,6 +2149,22 @@ export function assertSupportedNodeVersion(version = process.versions.node): voi
     `iterate deploy requires Node ${minMajor}.${minMinor} or newer (you are running Node v${version}). Older Node versions can fail Cloudflare sign-in (HTTP 403 / fetch failed) and lack ML-DSA-65 key support. Upgrade Node (e.g. brew install node, nvm install 24, fnm install 24, or https://nodejs.org) and run again.`,
   );
 }
+
+/** The owner email patterns of a deploy's config, or none: of one this run made, or of the one
+ *  that a mind's boundary keeps, where every field is as it was written. */
+const patternsOf = (config: unknown) =>
+  z.object({ ownerEmailPatterns: z.array(z.string()) }).safeParse(config).data
+    ?.ownerEmailPatterns || [];
+
+/** WHY A SOURCE CANNOT DEPLOY A CONFIG THAT HAS OWNER EMAIL PATTERNS, or null: `scriptConfig` is
+ *  the text of the source's core/alchemy/src/config.ts, and one from before the patterns names
+ *  no `ownerEmailPatterns` and refuses the field. Said here, before the script runs, in words
+ *  that name the two ways on. The patterns are never dropped to make an older source deploy:
+ *  that would end every owner by a pattern with no word of it. */
+export const patternsRefusalOf = (scriptConfig: string, config: unknown) =>
+  patternsOf(config).length > 0 && !scriptConfig.includes("ownerEmailPatterns")
+    ? `This mind has owner email patterns (${patternsOf(config).join(", ")}), and the source to deploy is a version of iterate from before them: it would refuse the config. The mind was not deployed. Deploy a source that has them (--source or --ref), or pass --owner-email-patterns none to take the patterns away, which ends every owner by a pattern.`
+    : null;
 
 /** Parses optional comma- or space-separated additional owner email addresses into a clean,
  *  deduplicated lowercase list. */
@@ -1902,6 +2191,8 @@ export async function deployMind(input: DeployInput) {
     if (process.platform === "win32")
       throw new Error("iterate deploy runs on macOS and Linux (on Windows: in WSL).");
     assertSupportedNodeVersion();
+    // a wrong `--mcp` stops before anything changes, not after the deploy
+    if (input.mcp) mcpClientsOf(input.mcp, []);
     // the source comes while the person signs in and chooses
     const sourceBegan = Date.now();
     const source = sourceOf(input);
@@ -1919,7 +2210,19 @@ export async function deployMind(input: DeployInput) {
         // a kept sign-in (`iterate cloudflare sign-in`) is a sign-in too: the same checks
         process.env[SIGN_IN_FILE]?.trim() || undefined,
       );
-    let access = await signIn();
+    if (input.newSignIn) {
+      // a new sign-in is the device flow's: a token from the environment would still be used
+      if (process.env.CLOUDFLARE_API_TOKEN?.trim() || process.env[SIGN_IN_FILE]?.trim())
+        throw new Error(
+          `--new-sign-in starts a new sign-in at Cloudflare, but CLOUDFLARE_API_TOKEN or ${SIGN_IN_FILE} is set and would be used instead. Unset it, or leave out --new-sign-in.`,
+        );
+      const notRevoked = await dropKeptAccess();
+      if (notRevoked)
+        p.log.warn(
+          `Cloudflare did not revoke the earlier sign-in (${notRevoked}). It ends by itself within the hour.`,
+        );
+    }
+    let access = await signIn(Boolean(input.newSignIn));
     // THE ACCESS ENDS WITHIN THE HOUR, and a wait for a card or a domain can be longer. So each
     // call takes the access anew: the kept one, or a new sign-in once it has too little left
     // (cloudflare-access.ts). One sign-in at a time, whatever calls wait for it.
@@ -1975,7 +2278,12 @@ export async function deployMind(input: DeployInput) {
         `Cloudflare refused the kept access (${user.status}). Run the command again to sign in.`,
       );
     }
-    p.log.info(`Signed in to Cloudflare${login ? ` as ${login}` : ""}.`);
+    const signedIn = `Signed in to Cloudflare${login ? ` as ${login}` : ""}.`;
+    p.log.info(
+      access.from === "sign-in" && !access.keptIn
+        ? `${signedIn}\nWrong Cloudflare login? Run again with --new-sign-in.`
+        : signedIn,
+    );
     // THE OWNER OF A NEW MIND: `--owner`, else the Cloudflare login, else a question. Asked for
     // only where it is needed: a mind that is there already keeps its owners.
     let asked: string | undefined;
@@ -1992,7 +2300,7 @@ export async function deployMind(input: DeployInput) {
         )
       ).toLowerCase());
 
-    const { account, covered } = await pickAccount(cf, input, newOwner);
+    const { account, covered, created } = await pickAccount(cf, input, newOwner);
     // An approval covers the accounts that the person selected on Cloudflare's page: a new
     // account, or one they did not select, takes one more approval.
     if (!covered) {
@@ -2120,6 +2428,7 @@ export async function deployMind(input: DeployInput) {
       extraOwners,
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
+      ownerEmailPatterns: input.ownerEmailPatterns,
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
       appleApps: input.appleApps,
@@ -2152,11 +2461,13 @@ export async function deployMind(input: DeployInput) {
         [
           `A mind is at ${domain} already. Its own config, from Cloudflare:`,
           `  control plane   ${deployed.controlPlaneHostname}`,
-          `  owners          ${deployed.ownerEmails.join(", ")}`,
+          `  owners          ${[...deployed.ownerEmails, ...patternsOf(deployed.deployConfig)].join(", ")}`,
           `  domains         ${deployed.zones.join(", ")}`,
           `  the mind runs   ${deployed.topology === "full-cloudflare" ? "in Cloudflare" : "elsewhere, and connects in"}`,
         ].join("\n"),
       );
+      const patternsBefore = patternsOf(deployed.deployConfig).join(", ");
+      const patternsAfter = patternsOf(config).join(", ");
       const changes = [
         ...(controlPlaneHostname === deployed.controlPlaneHostname
           ? []
@@ -2164,6 +2475,13 @@ export async function deployMind(input: DeployInput) {
         ...(config.ownerEmails.join() === deployed.ownerEmails.join()
           ? []
           : [`${config.ownerEmails.join(", ")} as its only owner`]),
+        ...(patternsBefore === patternsAfter
+          ? []
+          : [
+              patternsAfter
+                ? `EVERY address at ${patternsAfter} as an owner`
+                : `no owner by a pattern (was ${patternsBefore})`,
+            ]),
       ];
       const forwardBefore = forwardOf(deployed.deployConfig?.mail);
       const forwardAfter = forwardOf(config.mail);
@@ -2254,6 +2572,11 @@ export async function deployMind(input: DeployInput) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
+    const tooOld = patternsRefusalOf(
+      readFileSync(join(ready.dir, "core/alchemy/src/config.ts"), "utf8"),
+      config,
+    );
+    if (tooOld) throw new Error(tooOld);
     if (seedReposEnvOf(ready.dir).ITERATE_SEED_REPOS)
       p.log.info(
         "A new mind starts with the repo /repos/onboarding: its onboarding page, guides and cards.",
@@ -2263,7 +2586,7 @@ export async function deployMind(input: DeployInput) {
     writeFileSync(log, "");
     if (!paid) {
       await page(
-        "Turn on Workers Paid: 5 dollars a month. Cloudflare asks for a card there.",
+        workersPaidPrompt(created),
         `https://dash.cloudflare.com/${account.id}/workers/plans`,
       );
       await until(
@@ -2498,8 +2821,24 @@ export async function deployMind(input: DeployInput) {
     if (keyLine) p.log.info(keyLine);
     // the pages that did not answer end the command non-zero, with setup's address and no open
     if (unanswered) throw new Error(unanswered);
-    if (input.setup !== false) await page(setup.prompt, setup.url);
-    else p.log.step(`${setup.prompt}\n${c.url(setup.url)}`);
+    const onboarding = onboardingUrlOf(primaryZone);
+    const here =
+      input.setup === false
+        ? { opened: false, signedIn: false }
+        : await signInHere(input, {
+            controlPlaneHostname,
+            firstDeploy: isFirstDeploy,
+            setup,
+            onboarding,
+          });
+    // signed in, the owner has a passkey: setup is the onboarding page itself
+    const next = here.signedIn ? { ...setup, url: onboarding } : setup;
+    // a browser that went toward setup already is not sent there twice
+    if (!here.opened) {
+      if (input.setup !== false) await page(next.prompt, next.url);
+      else p.log.step(`${next.prompt}\n${c.url(next.url)}`);
+    }
+    if (isFirstDeploy || input.mcp) await addMcpHere(input, { controlPlaneHostname });
     // the check's miss, said above, ends the command non-zero once every step is done
     if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);

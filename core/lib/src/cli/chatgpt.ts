@@ -118,9 +118,12 @@ export async function exchange(material, fetch) {
 const random = () => randomBytes(32).toString("base64url");
 
 /** OpenAI's consent page for one sign-in. `hostId` is the mind's `urn:uuid:` id: OpenAI
- *  attributes the plan's usage to it. */
+ *  attributes the plan's usage to it. `address` is the mind's address (`iterate.example.com`):
+ *  the page suggests it as the name, so that a person with two minds tells their connections
+ *  apart. */
 export function authorizeUrl(input: {
   hostId: string;
+  address: string;
   state: string;
   verifier: string;
   nonce: string;
@@ -129,7 +132,7 @@ export function authorizeUrl(input: {
   url.search = new URLSearchParams({
     client_id: DYNAMIC_CLIENT_ID,
     // what the consent page calls the app; the person may rename it there
-    agent_name_hint: "iterate",
+    agent_name_hint: input.address,
     ext_agent_host_id: input.hostId,
     response_type: "code",
     redirect_uri: REDIRECT_URI,
@@ -391,7 +394,13 @@ export async function connectChatgpt(input: {
     );
   const state = random();
   const verifier = random();
-  const url = authorizeUrl({ hostId: mind.hostId, state, verifier, nonce: random() });
+  const url = authorizeUrl({
+    hostId: mind.hostId,
+    address,
+    state,
+    verifier,
+    nonce: random(),
+  });
   const callback = await waitForCallback(
     state,
     () => {
@@ -432,7 +441,7 @@ export async function connectChatgpt(input: {
   callback.answer(
     cloudPage ? { kind: "redirect", to: cloudPage } : { kind: "page", failed: false },
   );
-  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.`;
+  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.\nThe plan pays for chat, not for voice calls: voice needs an OpenAI API key or iterate Cloud credit.`;
   if (failure) throw failure;
   return input.test ? { message, test } : { message };
 }

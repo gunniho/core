@@ -5,22 +5,20 @@
 // agents, keeps its secrets and signs people in. What the mind DOES is this repo: a commit to
 // `main` is live a few seconds later, and the mind's own agents commit here too.
 //
-// The platform calls three methods of the class below:
+// The platform calls two methods of the class below:
 //
 //   fetch(request)             every request to a hostname of the mind: its apps, its website
-//   email({ mail, forward })   every mail to an address of the mind
 //   processEvent({ event })    every event of every context: a mail, a Slack message, a commit,
 //                              a schedule that fired
 //
 // Every other public method of the class is the mind's own API, `itx.config.<name>(…)`, for its
 // agents and its pages. Those are in api.ts. AGENTS.md is the guide to the rest of the repo.
-import type { EmailHookArgs } from "iterate/email";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
-import { ConfigApi } from "./api.ts";
+import { ConfigApi, TASKS_BOARD_REPO } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
+import { framedSignIn } from "./apps/dash/framed-sign-in.ts";
 import { designApp } from "./apps/design/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
-import { mcpApp } from "./apps/mcp/app.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import { tasksApp } from "./apps/tasks/app.ts";
@@ -41,12 +39,12 @@ const dash = dashApp();
 // The component preview library of @ritvel/ui (packages/ui/README.md).
 const design = designApp();
 const docs = docsApp();
-const mcp = mcpApp();
 const meet = meetApp();
 // The onboarding page and its guides are the repo /repos/onboarding; this repo keeps its steps.
 const onboarding = onboardingApp({ repo: "/repos/onboarding" });
-// The Tasks board shows the markdown files under tasks/ of /repos/onboarding: the onboarding cards.
-const tasks = tasksApp({ repo: "/repos/onboarding" });
+// The Tasks board shows the markdown files under tasks/ of the repo that the task calls use too
+// (api.ts `TASKS_BOARD_REPO`): /repos/onboarding, the onboarding cards.
+const tasks = tasksApp({ repo: TASKS_BOARD_REPO });
 
 export default class extends ConfigApi {
   // EVERY REQUEST, on every hostname of the mind but `iterate.<zone>`, where the platform answers
@@ -63,13 +61,15 @@ export default class extends ConfigApi {
     const route = async (request: Request): Promise<Response> => {
       switch (new URL(request.url).hostname.split(".")[0]) {
         case "dash": // the Dash, for members: the mind seen from above, and a chat with every agent
-          return dash.open(request) || this.auth.require(request) || dash.fetch(request, this);
+          return (
+            dash.open(request) ||
+            framedSignIn(request, this.auth.require(request)) ||
+            dash.fetch(request, this)
+          );
         case "design": // the Design app, for members: every component of @ritvel/ui, live
           return design.open(request) || this.auth.require(request) || design.fetch(request);
         case "docs": // Docs, for members: the files of the mind's repos, written together
           return docs.open(request) || this.auth.require(request) || docs.fetch(request, this);
-        case "mcp": // the mind's own MCP server, for members: open serves its app description, fetch answers MCP's own 401 and hands `run` to the platform (apps/mcp)
-          return mcp.open(request) || mcp.fetch(request, this);
         case "meet": // Meet, for members and their guests: its own routes ask for who they need
           return meet.fetch(request, this);
         case "onboarding": // the first steps of a new mind, for members
@@ -92,15 +92,6 @@ export default class extends ConfigApi {
     };
     const answer = await route(documentRequest(request, this));
     return addPageTag(request, answer, this, (work) => this.ctx.waitUntil(work));
-  }
-
-  // EVERY MAIL to an address of the mind, while its delivery is live. `save()` keeps it: one
-  // event on the context /integrations/email, which the `email/received` case below hands to an
-  // agent. A hook that returns without it leaves the mail off the log, and no agent gets it; one
-  // that throws or runs out of time leaves the mail on the log. To send the original on:
-  // `await forward("someone@example.com")`.
-  async email({ save }: EmailHookArgs) {
-    await save();
   }
 
   // EVERY EVENT of every context of the mind, one at a time, in no order, at least once: each

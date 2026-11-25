@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import { DEPLOY_SCOPES, RECOVER_SCOPES, scopesLacking, STACK_SCOPES } from "./cloudflare-access.ts";
 import {
+  alternativesOf,
   assertSupportedNodeVersion,
   boundaryCheck,
   boundaryRead,
@@ -16,6 +17,7 @@ import {
   deployArgsOf,
   deployStack,
   deployConfigOf,
+  patternsRefusalOf,
   deployedMind,
   domainPickerOptions,
   earlierDeployOf,
@@ -31,8 +33,10 @@ import {
   mindConfigIn,
   onboardingUrlOf,
   parseExtraOwnerEmails,
+  pickDomain,
   planArgsOf,
   setupDestinationOf,
+  signInPageOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   pnpmEnvFor,
@@ -49,7 +53,9 @@ import {
   WAITING_FOR_BOUNDARY,
   stageNameOf,
   unfinishedDeployIn,
+  workersPaidPrompt,
   zeroTrustStep,
+  zoneOf,
 } from "./deploy.ts";
 
 test("the stage is the zone with a hyphen for each dot, at most 32 characters, a letter first", () => {
@@ -180,6 +186,61 @@ test("a deploy over a mind keeps what the mind has, its id among it, and a flag 
     ownerEmails: ["grace@example.org"],
     alchemy: { stageName: "ada" },
   });
+});
+
+test("the owner email patterns are what --owner-email-patterns says, else what the mind has; none takes them away", () => {
+  const { accountId } = answers;
+  expect(deployConfigOf(answers)).not.toHaveProperty("ownerEmailPatterns");
+  expect(
+    deployConfigOf({ ...answers, ownerEmailPatterns: "*@company.example, *@second.example" }),
+  ).toMatchObject({ ownerEmailPatterns: ["*@company.example", "*@second.example"] });
+  // as the config is written to its file and to the boundary: JSON
+  expect(
+    JSON.parse(JSON.stringify(deployConfigOf({ ...answers, ownerEmailPatterns: "none" }))),
+  ).not.toHaveProperty("ownerEmailPatterns");
+  // a mind that has patterns keeps them with no flag, and loses them by `none` alone
+  const withPatterns = {
+    ...deployed,
+    deployConfig: {
+      alchemy: { stageName: "ada" },
+      cloudflare: { accountId, zones: deployed.zones },
+      ownerEmailPatterns: ["*@company.example"],
+    },
+  };
+  const over = (ownerEmailPatterns?: string) =>
+    deployConfigOf({ accountId, domain: "ada.example", deployed: withPatterns, ownerEmailPatterns })
+      .ownerEmailPatterns;
+  expect(over()).toEqual(["*@company.example"]);
+  expect(over("*@second.example")).toEqual(["*@second.example"]);
+  expect(over("none")).toBe(undefined);
+  for (const refused of [
+    "",
+    "company.example",
+    "*@*",
+    "*@Company.example",
+    "ada@company.example",
+    "*@company.example,",
+    // the mind's own zone, and a name under it
+    "*@ada-labs.com",
+    "*@mail.ada-labs.com",
+  ])
+    expect(() => deployConfigOf({ ...answers, ownerEmailPatterns: refused }), refused).toThrow(
+      /owner.email.pattern/i,
+    );
+});
+
+test("a source from before the owner email patterns is refused for a config that has some, and for no other", () => {
+  const before = "export const MindConfig = z.strictObject({ ownerEmails: z.array(z.email()) })";
+  const now = `${before} // ownerEmailPatterns`;
+  const withPatterns = deployConfigOf({ ...answers, ownerEmailPatterns: "*@company.example" });
+  expect(patternsRefusalOf(before, withPatterns)).toMatch(
+    /owner email patterns \(\*@company\.example\).*was not deployed.*--owner-email-patterns none/,
+  );
+  expect([
+    patternsRefusalOf(now, withPatterns),
+    patternsRefusalOf(before, deployConfigOf(answers)),
+    patternsRefusalOf(before, deployConfigOf({ ...answers, ownerEmailPatterns: "none" })),
+  ]).toEqual([null, null, null]);
 });
 
 test("the trace sampling is what --trace-sampling says, else what the mind has; default keeps every trace", () => {
@@ -352,6 +413,234 @@ test("domainPickerOptions builds one unified list with Buy a brand new domain on
     ["Use an existing cloudflare zone", true],
     ["No existing Cloudflare zones in this account", true],
   ]);
+});
+
+test("alternativesOf builds stem variations via candidatesOf without the taken domain itself", () => {
+  const acme = alternativesOf("acme.com");
+  expect(acme).not.toContain("acme.com");
+  expect(acme.slice(0, 8)).toEqual([
+    "acme.dev",
+    "acme.net",
+    "acme.xyz",
+    "acmerate.com",
+    "acmerate.dev",
+    "acmes.com",
+    "heyacme.com",
+    "acmehq.com",
+  ]);
+  expect(acme.length).toBeLessThanOrEqual(20);
+
+  const hyphenated = alternativesOf("Ada-Labs.com");
+  expect(hyphenated).not.toContain("ada-labs.com");
+  expect(hyphenated.slice(0, 5)).toEqual([
+    "ada-labs.dev",
+    "ada-labs.net",
+    "ada-labs.xyz",
+    "aderate.com",
+    "labserate.com",
+  ]);
+  expect(hyphenated).toContain("adalabs.com");
+  expect(hyphenated).toHaveLength(19);
+});
+
+test("pickDomain checks stem alternatives and shows them in the picker when a typed domain is taken and not theirs", async () => {
+  const checked: string[][] = [];
+  const cf = (async (method: string, path: string, body?: unknown) => {
+    if (method === "POST" && path.endsWith("/registrar/domain-check")) {
+      const domains = (body as { domains: string[] }).domains;
+      checked.push(domains);
+      if (domains.includes("acme.com")) {
+        return {
+          status: 200,
+          result: { domains: [{ name: "acme.com", registrable: false }] },
+          total: 1,
+          error: "",
+        };
+      }
+      if (domains.includes("acme.dev")) {
+        return {
+          status: 200,
+          result: {
+            domains: [
+              { name: "acme.dev", registrable: true, pricing: { registration_cost: "12.18" } },
+              { name: "acmerate.com", registrable: true, pricing: { registration_cost: "10.44" } },
+              { name: "acmes.com", registrable: false },
+            ],
+          },
+          total: 3,
+          error: "",
+        };
+      }
+      return {
+        status: 200,
+        result: {
+          domains: [
+            { name: "aderate.com", registrable: true, pricing: { registration_cost: "10.44" } },
+          ],
+        },
+        total: 1,
+        error: "",
+      };
+    }
+    return { status: 200, result: [], total: 0, error: "" };
+  }) as Parameters<typeof pickDomain>[0];
+
+  const seenSelects: { message: string; values: string[] }[] = [];
+  const selectAnswers = [ENTER_NEW_DOMAIN, "acme.dev"];
+  const confirmAnswers = [false, true];
+  const warnings: string[] = [];
+
+  const picked = await pickDomain(cf, "acct-1", {}, [], "Ada Lovelace", {
+    select: async ({ message, options }) => {
+      seenSelects.push({ message, values: options.map((option) => option.value) });
+      return selectAnswers.shift()!;
+    },
+    text: async () => "acme.com",
+    confirm: async () => confirmAnswers.shift()!,
+    warn: (message) => warnings.push(message),
+  });
+
+  expect(picked).toEqual({
+    domain: "acme.dev",
+    offer: { name: "acme.dev", registrable: true, pricing: { registration_cost: "12.18" } },
+  });
+  expect(warnings).toEqual([]);
+  expect(checked).toEqual([candidatesOf("Ada Lovelace"), ["acme.com"], alternativesOf("acme.com")]);
+  expect(seenSelects[0]?.message).toContain(
+    "It takes the whole domain, so the mind can be its site, mail and apps.",
+  );
+  // the alternatives from the taken domain appear before the earlier offers on the second prompt
+  expect(seenSelects[1]?.values.slice(0, 4)).toEqual([
+    "\0heading-buy",
+    "acme.dev",
+    "acmerate.com",
+    "aderate.com",
+  ]);
+});
+
+test("pickDomain skips alternative checks when a taken domain is theirs at another registrar", async () => {
+  const checked: string[][] = [];
+  const cf = (async (method: string, path: string, body?: unknown) => {
+    if (method === "POST" && path.endsWith("/registrar/domain-check")) {
+      const domains = (body as { domains: string[] }).domains;
+      checked.push(domains);
+      return {
+        status: 200,
+        result: { domains: domains.map((name) => ({ name, registrable: false })) },
+        total: domains.length,
+        error: "",
+      };
+    }
+    return { status: 200, result: [], total: 0, error: "" };
+  }) as Parameters<typeof pickDomain>[0];
+
+  const picked = await pickDomain(cf, "acct-1", {}, [], "Ada", {
+    select: async () => ENTER_NEW_DOMAIN,
+    text: async () => "acme.com",
+    confirm: async () => true,
+  });
+
+  expect(picked).toEqual({ domain: "acme.com" });
+  expect(checked).toEqual([candidatesOf("Ada"), ["acme.com"]]);
+});
+
+test("zoneOf prints nameservers and the DNSSEC reminder once while waiting for a pending outside zone", async () => {
+  const pause = async () => undefined;
+  const makeZoneCf = (
+    polls: { id: string; name: string; status: string; name_servers?: string[] }[],
+  ) =>
+    (async (_method: string, _path: string) => ({
+      status: 200,
+      result: polls.shift() ?? { id: "z1", name: "example.org", status: "active" },
+      total: 1,
+      error: "",
+    })) as Parameters<typeof zoneOf>[0];
+
+  // name_servers present on the pending zone from the start: printed once across multiple polls
+  const saidFromZone: string[] = [];
+  const activeFromZone = await zoneOf(
+    makeZoneCf([
+      {
+        id: "z1",
+        name: "example.org",
+        status: "pending",
+        name_servers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      },
+      { id: "z1", name: "example.org", status: "active" },
+    ]),
+    "acct-1",
+    {
+      domain: "example.org",
+      zone: {
+        id: "z1",
+        name: "example.org",
+        status: "pending",
+        name_servers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      },
+    },
+    { say: (line) => saidFromZone.push(line), pause },
+  );
+  expect(activeFromZone).toMatchObject({ status: "active" });
+  expect(saidFromZone).toEqual([
+    "Set example.org's nameservers at your registrar to:\n  ada.ns.cloudflare.com\n  bob.ns.cloudflare.com\nTurn DNSSEC off at your current registrar before changing nameservers.",
+  ]);
+
+  // name_servers returned only on GET /zones/<id>: still printed once, not on every poll
+  const saidFromPoll: string[] = [];
+  await zoneOf(
+    makeZoneCf([
+      {
+        id: "z1",
+        name: "example.org",
+        status: "pending",
+        name_servers: ["carol.ns.cloudflare.com", "dave.ns.cloudflare.com"],
+      },
+      {
+        id: "z1",
+        name: "example.org",
+        status: "pending",
+        name_servers: ["carol.ns.cloudflare.com", "dave.ns.cloudflare.com"],
+      },
+      { id: "z1", name: "example.org", status: "active" },
+    ]),
+    "acct-1",
+    { domain: "example.org", zone: { id: "z1", name: "example.org", status: "pending" } },
+    { say: (line) => saidFromPoll.push(line), pause },
+  );
+  expect(saidFromPoll).toEqual([
+    "Set example.org's nameservers at your registrar to:\n  carol.ns.cloudflare.com\n  dave.ns.cloudflare.com\nTurn DNSSEC off at your current registrar before changing nameservers.",
+  ]);
+
+  // a domain bought at Cloudflare's registrar prints no nameserver instructions
+  const saidForBought: string[] = [];
+  await zoneOf(
+    makeZoneCf([{ id: "z1", name: "bought.dev", status: "active" }]),
+    "acct-1",
+    {
+      domain: "bought.dev",
+      offer: { name: "bought.dev", registrable: true },
+      zone: {
+        id: "z1",
+        name: "bought.dev",
+        status: "pending",
+        name_servers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      },
+    },
+    { say: (line) => saidForBought.push(line), pause },
+  );
+  expect(saidForBought).toEqual([]);
+});
+
+test("workersPaidPrompt covers Purchase, bank confirmation, card declines, and the reload hint only for newly created accounts", () => {
+  const existing = workersPaidPrompt(false);
+  expect(existing).toContain("Purchase");
+  expect(existing).toContain("confirm the payment");
+  expect(existing).toContain("declines a card on a new account");
+  expect(existing).not.toContain("not authorized");
+
+  const created = workersPaidPrompt(true);
+  expect(created).toContain(existing);
+  expect(created).toContain("not authorized, wait a minute and reload");
 });
 
 test("redactMindConfig and formatMindConfigForStdout print full MindConfig while redacting any sensitive keys", () => {
@@ -638,6 +927,26 @@ test("createDeployProgress names what Alchemy is still making, for a line in a q
   expect(progress.stillAt()).toBe("3 of 31 resources; still making Mind, Boundary");
 });
 
+test("the sign-in after a first deploy goes through the first passkey to the issuer's page; a redeploy's goes straight there", () => {
+  const authorize =
+    "https://iterate.ada-labs.com/oauth/authorize?client_id=c1&redirect_uri=http%3A%2F%2Flocalhost%3A5050%2Fcallback";
+  const first = new URL(
+    signInPageOf({ controlPlaneHostname: "iterate.ada-labs.com", firstDeploy: true }, authorize),
+  );
+  expect({
+    first: `${first.origin}${first.pathname}`,
+    next: first.searchParams.get("next"),
+    again: signInPageOf(
+      { controlPlaneHostname: "iterate.ada-labs.com", firstDeploy: false },
+      authorize,
+    ),
+  }).toEqual({
+    first: "https://iterate.ada-labs.com/sign-in/access",
+    next: authorize,
+    again: authorize,
+  });
+});
+
 test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
   expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
   expect(
@@ -746,6 +1055,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     mindId: "cd".repeat(32),
     controlPlaneHostname: "iterate.ada-labs.com",
     ownerEmails: ["ada@example.org"],
+    ownerEmailPatterns: ["*@company.example"],
     topology: "full-cloudflare",
     alchemy: { stageName: "ada-labs-com" },
     cloudflare: {

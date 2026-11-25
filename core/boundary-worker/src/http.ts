@@ -30,7 +30,13 @@ const APPROVED_ACT_GRACE_MS = 3000;
 /** The mind, as the boundary reaches it. */
 export type MindTransport = Pick<
   MindTarget,
-  "fetch" | "append" | "runAct" | "receiveEmail" | "email" | "api"
+  | "fetch"
+  | "append"
+  | "runAct"
+  | "receiveEmail"
+  | "emailForwardRequest"
+  | "emailForwardClaim"
+  | "api"
 > & {
   /** Only where the mind runs elsewhere: the answer to its dial, a session of the API that ends
    *  in the object which holds the mind's link (./provided-mind.ts). */

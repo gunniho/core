@@ -17,6 +17,7 @@ import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
 import { addressOf, connectMind, discoveredMind, openForSignIn, signInToMind } from "../node.ts";
 import { mindApiUrlOf, mindMcpUrlOf, mindProvideConnectResourceOf } from "../mind-api.ts";
+import { MCP_CLIENTS, type McpClient, mcpAddArgvOf } from "./mcp-clients.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
@@ -207,6 +208,32 @@ const mindOption = z
 /** The same, as a command's one argument. */
 const mindArgument = mindOption.meta({ positional: true });
 
+/** `iterate mcp <client>`: the command that adds the mind's MCP server to that coding agent
+ *  (./mcp-clients.ts), printed, or run with `--exec`. */
+const mcpCommand = (client: McpClient) =>
+  os
+    .input(
+      z.object({
+        mind: mindOption,
+        exec: z.boolean().optional().describe("Run the command instead of printing it"),
+      }),
+    )
+    .meta({
+      description: `The command that adds the mind's MCP server to ${MCP_CLIENTS[client].title}, for all your folders: printed, or run with --exec. ${MCP_CLIENTS[client].title} then signs in with the mind's issuer`,
+    })
+    .handler(async ({ input }) => {
+      const [command, ...args] = mcpAddArgvOf(client, mindMcpUrlOf(await resolveMind(input.mind)));
+      if (!input.exec) {
+        // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
+        console.log(shellCommand([command!, ...args]));
+        return;
+      }
+      const run = spawnSync(command!, args, { stdio: "inherit" });
+      if (run.error)
+        throw new Error(`Could not start ${command}: ${run.error.message}`, { cause: run.error });
+      process.exit(run.status ?? 1);
+    });
+
 /** THE ADDRESS THAT THE TWO `identity` COMMANDS ASK: `--mind` as a person typed it, read here
  *  alone, with no discovery (no other host is asked first), else the profile's. */
 const identityAddressOf = async (given?: string) => (given ? addressOf(given) : resolveMind());
@@ -229,11 +256,21 @@ const launcherProcedures = {
           .describe("The mind's domain: a zone of the account, or one to buy or bring"),
         account: z.string().optional().describe("The Cloudflare account, by id or name"),
         newAccount: z.boolean().optional().describe("Make a new Cloudflare account for the mind"),
+        newSignIn: z
+          .boolean()
+          .optional()
+          .describe("Drop the kept Cloudflare sign-in and start a new one"),
         owner: z
           .string()
           .optional()
           .describe(
             "The owner's email address (default: the Cloudflare login's; for a mind that is there already: the owners it has)",
+          ),
+        ownerEmailPatterns: z
+          .string()
+          .optional()
+          .describe(
+            "More owners by pattern: *@<domain> makes EVERY address at exactly that domain an owner, who proves the address with Cloudflare and adds a passkey; a comma between two; none takes them away. Name a domain only when its mail is the company's own (default: none; for a mind that is there already: what it has)",
           ),
         controlPlaneHostname: z
           .string()
@@ -305,6 +342,19 @@ const launcherProcedures = {
           .describe(
             "With a person at the terminal, after the deploy: wait for Enter and open https://onboarding.<zone>/ in the browser to continue setup",
           ),
+        signIn: z
+          .boolean()
+          .default(true)
+          .meta({ negatable: true })
+          .describe(
+            "After the deploy, sign this computer in to the mind on the way to setup, so iterate commands reach it (a new owner adds their first passkey on the way)",
+          ),
+        mcp: z
+          .string()
+          .optional()
+          .describe(
+            "The coding agents on this computer that get the mind's MCP server: claude, codex, grok, agy with a comma between, all (those found) or none (default: with a person there, a question on a first deploy; else none)",
+          ),
       }),
     )
     .meta({
@@ -316,6 +366,7 @@ const launcherProcedures = {
     .input(
       z.object({
         domain: z.string().describe("A domain of the mind"),
+        account: z.string().optional().describe("The Cloudflare account, by id"),
         owner: z.string().describe("The email address of the owner who has no passkey left"),
         yes: z.boolean().optional().describe("Revoke and make the link without a question"),
       }),
@@ -586,31 +637,10 @@ const launcherProcedures = {
       }),
   },
   mcp: {
-    claude: os
-      .input(
-        z.object({
-          mind: mindOption,
-          exec: z.boolean().optional().describe("Run the command instead of printing it"),
-        }),
-      )
-      .meta({
-        description:
-          "The command that adds the mind's MCP server to Claude Code: printed, or run with --exec. Claude Code then signs in with the mind's issuer (/mcp in Claude Code)",
-      })
-      .handler(async ({ input }) => {
-        const argv = claudeMcpAddArgs(mindMcpUrlOf(await resolveMind(input.mind)));
-        if (!input.exec) {
-          // stdout carries the command alone, so `eval "$(iterate mcp claude)"` runs it
-          console.log(shellCommand(["claude", ...argv]));
-          return;
-        }
-        const claude = spawnSync("claude", argv, { stdio: "inherit" });
-        if (claude.error)
-          throw new Error(`Could not start claude: ${claude.error.message}`, {
-            cause: claude.error,
-          });
-        process.exit(claude.status ?? 1);
-      }),
+    claude: mcpCommand("claude"),
+    codex: mcpCommand("codex"),
+    grok: mcpCommand("grok"),
+    agy: mcpCommand("agy"),
   },
   chatgpt: {
     connect: os
@@ -885,18 +915,6 @@ export const runCli = async () => {
     logger: yamlTableConsoleLogger,
   });
 };
-
-/** Claude Code's arguments that add one HTTP MCP server named `iterate` at `mcpUrl`
- *  (https://code.claude.com/docs/en/mcp). It signs in itself: the server's protected-resource
- *  metadata names the mind's issuer. */
-export const claudeMcpAddArgs = (mcpUrl: string) => [
-  "mcp",
-  "add",
-  "--transport",
-  "http",
-  "iterate",
-  mcpUrl,
-];
 
 /** POSIX-shell-quoted: plain words bare, anything else single-quoted with `'` spelled `'\''`. */
 export const shellCommand = (argv: string[]) =>

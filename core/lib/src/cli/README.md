@@ -16,7 +16,7 @@ npx iterate login example.com --device    # approve from a phone, when the issue
 npx iterate whoami
 npx iterate repl --context /notes         # local Node REPL
 npx iterate itx run --eval 'return await itx.whoami();'
-npx iterate mcp claude                    # the command that adds the mind's MCP server to Claude Code
+npx iterate mcp claude                    # the command that adds the mind's MCP server to Claude Code; also codex, grok, agy
 npx iterate use-my-computer --name myComputer
 npx iterate tunnel 5173 --name blog       # a local port on blog.<address>
 npx iterate provide ./whatsapp.ts         # a local file's functions as itx.whatsapp
@@ -76,32 +76,36 @@ What it does, in order:
 1. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
-   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
+   run asks for no second approval. Pass `--new-sign-in` to drop it and sign in with another
+   Cloudflare login. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
    - The sign-in asks for what one deploy of the stack needs and for nothing more (never "Account
      API Token Provisioning"): `STACK_SCOPES` in [cloudflare-access.ts](cloudflare-access.ts) says
      which resource needs each scope.
 2. **The account.** One that you selected on Cloudflare's page, or a new one in your name
-   (`--new-account`): Cloudflare allows a login five extra accounts. An approval covers only the
-   accounts selected on that page, so for a new account, or one you did not select, Cloudflare
-   asks once more.
+   (`--new-account`): one Cloudflare login can own several accounts (up to five extra), giving the
+   mind a clean, separate place. An approval covers only the accounts selected on that page, so for
+   a new account, or one you did not select, Cloudflare asks once more.
 3. **The domain.** One unified list puts **Buy a brand new domain** at the top (available names
    made from your name with their yearly price, plus **Enter a brand new domain name and buy
-   that** to type a domain or keywords) and **Use an existing cloudflare zone** right below it. It
+   that** to type a domain or keywords) and **Use an existing cloudflare zone** right below it. If
+   a typed domain is taken and not yours at another registrar, the command checks alternatives made
+   from its stem and shows them in the same picker. It
    asks before it buys, with the price; `--buy` is the yes. Cloudflare charges the account's
    payment method and registers the domain to the account's contact. Both are set on Cloudflare's
    own pages: an account that never registered a domain is sent to the page for its contact details
    first, and a purchase that Cloudflare refuses says why and opens the page where that is set.
    A domain from another registrar you add on Cloudflare's own page, and the command waits until
-   the account has it. The mind takes a whole domain that nothing else uses (a new one is
-   best; a subdomain works when it is a zone of its own). A domain of the account with a route of
+   the account has it; once the zone appears as pending, it prints the nameservers to set and
+   reminds you to turn DNSSEC off at the current registrar first. The mind takes a whole domain that
+   nothing else uses, so it can be the domain's site, mail and apps (a new one is best; a subdomain
+   works when it is a zone of its own). A domain of the account with a route of
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
 4. **Telemetry: no token.** The deploy makes the telemetry bucket and its streams, and no tables
-   (`events`, `logs`, `spans`, and `metrics` SQL). The mind turns them on itself: ask its agent to
-   turn on telemetry (`onboarding/telemetry.md` of `/repos/onboarding`). It asks a member for a token of the account and
-   makes the tables with it; no second deploy is needed. A mind whose tables an earlier deploy
-   made with a token keeps that token in the stack's state.
+   (`events`, `logs`, `spans`). The mind reads Cloudflare's own datasets and `metrics` through
+   `itx.telemetry.query`, with no token (`onboarding/telemetry.md` of `/repos/onboarding`). A mind
+   whose tables an earlier deploy made with a token keeps that token in the stack's state.
 5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
    until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
    A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command
@@ -120,6 +124,10 @@ What it does, in order:
      domain itself, or one label under it.
    - `ownerEmails`: the owner, who is the Cloudflare login unless `--owner` names another address.
      The address must not be at the mind's own domain.
+   - `ownerEmailPatterns`: none, unless `--owner-email-patterns '*@company.example'` names some
+     (a comma between two; `none` takes them away). A pattern makes every address at exactly
+     that domain an owner: the person proves the address with Cloudflare Access and adds a
+     passkey. The domain must not be the mind's own.
    - `alchemy.stageName`, the middle of every resource's name (`iterate-<stage>-auth`): never
      asked. It is the domain with `-` for each dot, cut to 32 characters, with `z` first when
      the domain starts with a digit.
@@ -128,9 +136,8 @@ What it does, in order:
      forwarded as it arrived ([core/alchemy](../../../alchemy/README.md#the-one-input)). The
      address must be a verified destination address of the account's Email Routing, which a
      person adds in the dashboard; while it is not, every mail to the mind fails for its sender.
-     A stack with a forward address records every mail on the log before the forward, whatever
-     the config's `email` hook does: the forward must not go twice, and a refused forward must
-     not cost the mail its place on the log.
+     Every mail is on the log before the forward: a refused forward does not cost the mail its
+     place there.
    - `cloudflare.egressGatewayWorker`: absent, unless `--egress-gateway <Worker name>` names a
      Worker of the account that carries what a mind's `itx.fetch` sends out of the stack, each
      request with its secret in ([core/alchemy](../../../alchemy/README.md) says what does not
@@ -239,10 +246,29 @@ after a no, it still posts the mind's identity and prints the config, then print
 address, opens nothing and ends non-zero. Run the command again to check again: it deploys over
 the mind. The check is this computer's view: a browser with another resolver can still differ.
 
-After the deploy, once the mind is answering and its identity is posted, the command prints a short
-success message, waits for Enter, and opens `https://onboarding.<zone>/` in the browser to continue
-setup there. With `--no-setup`, in non-interactive mode, or over SSH / headless Linux, it prints
-`https://onboarding.<zone>/` without waiting or opening a browser.
+After the deploy, once the mind is answering and its identity is posted, **the way to setup also
+signs this computer in to the mind**, so `iterate` commands reach it at once. The command prints a
+short link to this computer's own sign-in listener (`http://localhost:<port>/start`), waits for
+Enter and opens it. On a new mind the browser goes to `https://<control plane>/sign-in/access`:
+Cloudflare Access mails the owner a code, the owner adds their first passkey, and the browser goes
+on to the mind's consent page for the CLI, signed in. After **Allow** the browser comes back to the
+listener, which sends it on to `https://onboarding.<zone>/`. Over SSH or headless Linux, or for a
+coding agent, the device sign-in prints the same way in, ending at the approval page with its code
+filled in. The command waits up to 30 minutes for the browser (the device code lasts 5). A failed
+sign-in does not fail the deploy: the command says to run `iterate login <control plane>`. A
+computer with no mind in any profile takes the new mind as its default profile's.
+
+A redeploy from a computer that has a sign-in to the mind opens `https://onboarding.<zone>/`.
+`--no-sign-in` keeps the old end: setup's page alone. With `--no-setup`, or with nobody at the
+terminal and no coding agent (a CI job), nothing is signed in and the command prints setup's address
+without waiting or opening a browser.
+
+**On a first deploy, the command offers the mind's MCP server to the coding agents on this
+computer**: Claude Code, Codex, Grok and Antigravity, each one whose command (`claude`, `codex`,
+`grok`, `agy`) is on `PATH`, all ticked. Each gets the server for all your folders under the name
+`iterate-<control plane with - for .>` (`iterate mcp <client>` prints the command), and signs in to
+it itself at its first use: one **Allow** in a browser that is signed in to the mind. `--mcp
+claude,codex` (or `all`, or `none`) answers the question, also for a coding agent or a redeploy.
 
 **It handles the expected way alone.** A run that stops says why. Run it again on the same
 computer: each step reads what the account has, and a deploy keeps what it made. A coding agent
@@ -338,8 +364,9 @@ mind. So the proof is the mind's Cloudflare account, as it is for a deploy. Its 
 
 The command signs in to Cloudflare as `iterate deploy` does, and asks for much less: it reads the
 domain, its routes and the boundary Worker's settings, and it writes to D1. It finds the mind by
-its domain, checks that the address is one of the mind's owners, asks for a yes (`--yes`), and
-then runs two statements on the auth Worker's database, `iterate-<stage>-auth-db`:
+its domain (pass `--account <id>` when the domain is in more than one account), checks that the
+address is one of the mind's owners, asks for a yes (`--yes`), and then runs two statements on the
+auth Worker's database, `iterate-<stage>-auth-db`:
 
 1. It revokes every passkey of that owner. A link opens nothing while one is live.
 2. It adds one sign-in link, of which the database holds only the SHA-256 of its random ticket.

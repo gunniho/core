@@ -269,11 +269,17 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
     buttons: [
       {
         label: "Try a voice call",
-        href: "https://dash.example.com/agents/agents/onboarding",
+        href: "https://dash.example.com/agents/agents/main",
       },
+      { label: "Add my OpenAI key", action: "add-openai-key", opens: true },
       OPEN_LINK,
       { label: "Disconnect", action: "disconnect", opens: true },
     ],
+  });
+  // an owner can switch to their own OpenAI key at any time from the connected card
+  expect(await runStep(context, STEP, "add-openai-key")).toMatchObject({
+    status: "connected",
+    link: "https://mind.example.com/secrets/collect/1",
   });
   const [note] = mind.chat();
   expect(note).toMatchObject({
@@ -523,7 +529,7 @@ test("OpenAI set by proxy, then Exa's set throws: the card says what stands, and
   const half = await runStep(context, STEP, "connect");
   expect(half).toMatchObject({ status: "connected" });
   expect(half.words).toMatch(
-    /Buttons: Try again · Try a voice call · Open iterate Cloud · Disconnect/,
+    /Buttons: Try again · Try a voice call · Add my OpenAI key · Open iterate Cloud · Disconnect/,
   );
   expect(half.words).toMatch(
     /The connect stopped before it finished\. iterate's credit already pays for OpenAI\. Try again sets up the rest\./,
@@ -1049,7 +1055,7 @@ test("the credit used: iterate's proxy is switched off once, the card says what 
     "Your $10 of iterate credit is used.\nYour mind's requests no longer go to iterate.\nYour agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.\nWeb research needs a key of your own.\nChoose what pays now:",
   );
   const drawn = () =>
-    mind.chat().filter((event) => event.type === "events.iterate.com/agent/web-message-sent");
+    mind.chat().filter((event) => event.type === "events.iterate.com/agent-ui/message-sent");
   expect(drawn()).toHaveLength(1);
   expect(mind).toMatchObject({
     mailed: [{ from: "onboarding@example.com", to: "owner@example.org" }],
@@ -1076,10 +1082,18 @@ test("a request that iterate's proxy refused for storage starts a check and chan
   fake.calls.length = 0;
   for (const code of ["iterate_credit_store_not_off", "iterate_credit_nothing_stored"])
     await hook(mind, fake.credit, {
-      type: "events.iterate.com/agent/llm-request-settled",
+      type: "events.iterate.com/llm-request/settled",
       path: "/agents/a",
       offset: 900,
-      payload: { failedKeys: [{ key: 1, error: `400 ${code}: storage at OpenAI must be off` }] },
+      payload: {
+        llmRequestOffset: 899,
+        attempt: 0,
+        result: {
+          status: "failed",
+          failureKind: "provider",
+          errorMessage: `400 ${code}: storage at OpenAI must be off`,
+        },
+      },
     });
   // each event read the balance again, and set or deleted nothing
   expect(fake).toMatchObject({ calls: ["balance", "balance"] });
@@ -1191,11 +1205,17 @@ test("iterate's limit at the provider on a forwarded answer deletes no secret by
   const before = await runStep(context, STEP, "check");
   fake.calls.length = 0;
   await hook(mind, fake.credit, {
-    type: "events.iterate.com/agent/llm-request-settled",
+    type: "events.iterate.com/llm-request/settled",
     path: "/agents/a",
     offset: 901,
     payload: {
-      failedKeys: [{ key: 1, error: "503 iterate_credit_provider_limit: iterate's limit" }],
+      llmRequestOffset: 900,
+      attempt: 0,
+      result: {
+        status: "failed",
+        failureKind: "provider",
+        errorMessage: "503 iterate_credit_provider_limit: iterate's limit",
+      },
     },
   });
   expect(fake).toMatchObject({
@@ -1346,7 +1366,9 @@ test("GET /open-cloud for a member: a 303 to this mind's own /sign-in/open, on t
   const fake = fakeCredit();
   const context = contextOf(mind, fake.credit);
   const connected = await runStep(context, STEP, "connect");
-  expect(connected.words).toMatch(/Buttons: Try a voice call · Open iterate Cloud · Disconnect/);
+  expect(connected.words).toMatch(
+    /Buttons: Try a voice call · Add my OpenAI key · Open iterate Cloud · Disconnect/,
+  );
   const [card] = await onboardingCards(context);
   // a plain link to the app's own route
   expect(card?.buttons).toContainEqual(OPEN_LINK);
@@ -1500,10 +1522,14 @@ test("the hook reads nothing for an event no step hears", async () => {
     { type: "events.iterate.com/secret/set", path: "/secrets/google", offset: 2 },
     { type: "events.iterate.com/mind-meld/configured", path: "/minds/other.example", offset: 3 },
     {
-      type: "events.iterate.com/agent/llm-request-settled",
+      type: "events.iterate.com/llm-request/settled",
       path: "/agents/a",
       offset: 4,
-      payload: { failedKeys: [{ key: 1, error: "429 rate limited" }] },
+      payload: {
+        llmRequestOffset: 3,
+        attempt: 0,
+        result: { status: "failed", failureKind: "provider", errorMessage: "429 rate limited" },
+      },
     },
   ])
     await onboardingEvent(itx, event);
@@ -2165,7 +2191,8 @@ test("onboarding page is a centered no-AI wizard with no AgentChat, the optional
   expect(pageJs).toContain("/verify-ai");
   expect(pageJs).toContain("https://dash.${zone}/agents${AGENT}");
   expect(pageJs).toContain("approves each mind");
-  expect(pageJs).toContain("llmRequestOffset");
+  expect(pageJs).toContain("events.iterate.com/llm-request/settled");
+  expect(pageJs).toContain("events.iterate.com/agent-ui/message-sent");
   expect(pageJs).toContain('status === "disconnecting"');
   expect(pageJs).toContain("Done: your mind is set up");
   expect(pageJs).toContain('data-action="open-dash"');
@@ -2178,9 +2205,9 @@ test("renderOnboardingTasksOverview formats onboarding cards, depends-on links, 
   const { text, tasks } = renderOnboardingTasksOverview(
     {
       "tasks/onboarding-website.md":
-        "---\nstatus: in-progress\ntags: [onboarding, first-sitting]\npriority: high\nagent: /agents/onboarding/website\n---\n\n# Build a first public homepage\n\nMake a public page at your domain.\n",
+        "---\nstatus: in-progress\ntags: [onboarding, first-sitting]\npriority: high\nagent: /agents/main/website\n---\n\n# Build a first public homepage\n\nMake a public page at your domain.\n",
       "tasks/onboarding-telemetry.md":
-        "---\nstatus: todo\ntags: [onboarding, first-sitting]\npriority: medium\nagent: /agents/onboarding\ndepends-on: [tasks/onboarding-website.md]\n---\n\n# Inspect live visits\n\nCheck visits via itx.telemetry.query.\n",
+        "---\nstatus: todo\ntags: [onboarding, first-sitting]\npriority: medium\nagent: /agents/main\ndepends-on: [tasks/onboarding-website.md]\n---\n\n# Inspect live visits\n\nCheck visits via itx.telemetry.query.\n",
       "tasks/other.md": "---\nstatus: todo\ntags: [personal]\n---\n\n# Buy milk\n",
     },
     "example.com",
@@ -2197,7 +2224,7 @@ test("renderOnboardingTasksOverview formats onboarding cards, depends-on links, 
   expect(text).not.toContain("Buy milk");
 });
 
-test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions, tasks & dependencies overview, opener, and immediate background subagents (idempotently)", async () => {
+test("launchOnboardingAgent creates /agents/main with bespoke instructions, tasks & dependencies overview, opener, and immediate background subagents (idempotently)", async () => {
   const mind = fakeMind();
   const created: string[] = [];
   const launchItx = {
@@ -2215,50 +2242,54 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   });
   expect(first).toMatchObject({ launched: true });
   expect(first.tasksCount).toBeGreaterThanOrEqual(10);
-  expect(created).toEqual([
-    ONBOARDING_AGENT,
-    "/agents/onboarding/researcher",
-    "/agents/onboarding/sandbox",
-  ]);
+  expect(created).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   const onboardingEvents = mind.chat();
   expect(onboardingEvents.map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:pin-in-dash",
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
     "onboarding:init:owner",
     `opener:${ONBOARDING_AGENT}`,
     "onboarding:helpers-started",
   ]);
-  expect(JSON.stringify(onboardingEvents[0]?.payload)).toContain("Onboarding agent instructions");
-  expect(onboardingEvents[0]?.payload).toMatchObject({
+  expect(onboardingEvents[0]).toMatchObject({
+    type: "events.iterate.com/itx/described",
+    payload: {
+      description: "Your main conversation.",
+      metadata: { title: "Main conversation", tags: ["pinned-in-dash"] },
+    },
+  });
+  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain("Main agent instructions");
+  expect(onboardingEvents[1]?.payload).toMatchObject({
     role: "developer",
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
-  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain(
     "https://tasks.example.com/?tag=onboarding",
   );
-  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain(
     "Depends on: tasks/onboarding-website.md (in-progress)",
   );
-  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain("ada@example.com");
-  expect(onboardingEvents[2]?.payload).toMatchObject({
+  expect(JSON.stringify(onboardingEvents[3]?.payload)).toContain("ada@example.com");
+  expect(onboardingEvents[3]?.payload).toMatchObject({
     role: "developer",
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
-  expect(onboardingEvents[3]?.payload).toMatchObject({ role: "developer" });
-  expect(onboardingEvents[3]?.payload).not.toHaveProperty("llmRequestPolicy");
+  expect(onboardingEvents[4]?.payload).toMatchObject({ role: "developer" });
+  expect(onboardingEvents[4]?.payload).not.toHaveProperty("llmRequestPolicy");
   // Background `researcher` (which hands off to `website` after research + logo) and `sandbox` subagents started immediately,
   // and `researcher` receives the owner's email right in its initial prompt.
-  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
-  expect(JSON.stringify(mind.logs.get("/agents/onboarding/researcher")?.[0]?.payload)).toContain(
+  expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
+  expect(JSON.stringify(mind.logs.get("/agents/main/researcher")?.[0]?.payload)).toContain(
     "ada@example.com",
   );
-  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
+  expect(mind.logs.get("/agents/main/sandbox")).toHaveLength(1);
 
   // Re-running launch is idempotent and appends nothing twice
   await launchOnboardingAgent(launchItx, { email: "ada@example.com", name: "Ada Lovelace" });
-  expect(mind.chat()).toHaveLength(5);
-  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
-  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
+  expect(mind.chat()).toHaveLength(6);
+  expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
+  expect(mind.logs.get("/agents/main/sandbox")).toHaveLength(1);
 });
 
 test("launchOnboardingAgent reads the instructions and the cards of /repos/onboarding at its tip, and makes no repo", async () => {
@@ -2279,11 +2310,11 @@ test("launchOnboardingAgent reads the instructions and the cards of /repos/onboa
       "modules /repos/onboarding tasks at c1",
     ],
   });
-  expect(mind.chat()[0]?.payload).toMatchObject({
+  expect(mind.chat()[1]?.payload).toMatchObject({
     content: "# Your instructions\n\nThe board is at https://tasks.example.com/.\n",
   });
   // the overview names the repo the cards are in
-  expect(JSON.stringify(mind.chat()[1]?.payload)).toContain("/repos/onboarding");
+  expect(JSON.stringify(mind.chat()[2]?.payload)).toContain("/repos/onboarding");
 });
 
 test("launchOnboardingAgent launches nothing on a mind with no /repos/onboarding, or none with a commit: there is no guide to give the agent", async () => {
@@ -2342,7 +2373,7 @@ test("a member's request for the page goes to the worker of /repos/onboarding at
   );
 });
 
-test("POST /verify-ai launches /agents/onboarding on success and does not create it on failure", async () => {
+test("POST /verify-ai launches /agents/main on success and does not create it on failure", async () => {
   const app = onboardingApp();
   const createdOk: string[] = [];
   const mindOk = fakeMind();
@@ -2365,12 +2396,9 @@ test("POST /verify-ai launches /agents/onboarding on success and does not create
   );
   expect(okRes).toMatchObject({ status: 200 });
   expect(await okRes.json()).toMatchObject({ ok: true, provider: "ai-gateway" });
-  expect(createdOk).toEqual([
-    ONBOARDING_AGENT,
-    "/agents/onboarding/researcher",
-    "/agents/onboarding/sandbox",
-  ]);
+  expect(createdOk).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   expect(mindOk.chat().map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:pin-in-dash",
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
     `opener:${ONBOARDING_AGENT}`,
@@ -2436,7 +2464,7 @@ test("a note that fails at the signed rule leaves the connect waiting: the retry
     ...mind.itx,
     cd: (path: string) => {
       const at = mind.itx.cd(path);
-      if (path !== "/agents/onboarding" || !fail) return at;
+      if (path !== "/agents/main" || !fail) return at;
       fail = false;
       return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
     },
@@ -2463,7 +2491,7 @@ test("at iterate's enrolment-open, a note that fails is one log line: the connec
     ...mind.itx,
     cd: (path: string) => {
       const at = mind.itx.cd(path);
-      if (path !== "/agents/onboarding") return at;
+      if (path !== "/agents/main") return at;
       return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
     },
   } as OnboardingItx;
@@ -2555,7 +2583,7 @@ test("the credit-used mail goes once for each grant: two checks at the same mome
   expect(mind.mailed).toHaveLength(1);
   const drawn = mind
     .chat()
-    .filter((event) => event.type === "events.iterate.com/agent/web-message-sent");
+    .filter((event) => event.type === "events.iterate.com/agent-ui/message-sent");
   expect(drawn).toHaveLength(1);
 });
 
@@ -2787,7 +2815,7 @@ function fakeMind(
     mailed,
     sign,
     onboarding: () => logOf("/apps/onboarding").map((e) => e.type.split("/").at(-1)),
-    chat: () => logOf("/agents/onboarding"),
+    chat: () => logOf("/agents/main"),
   };
 }
 

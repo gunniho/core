@@ -44,7 +44,7 @@ const LEAST_LEFT_MS = 20 * 60_000;
 /** WHAT ONE DEPLOY OF THE STACK NEEDS: a scope for each kind of resource that
  *  core/alchemy/src/stack.ts declares, and for nothing else. A Worker's bindings to Workers AI,
  *  Browser Rendering, Images and Analytics Engine are part of its upload and need no scope of
- *  their own. The deploy makes no telemetry token: the mind turns its tables on itself. */
+ *  their own. The deploy makes no telemetry token. */
 export const STACK_SCOPES = [
   // the five Workers with their Durable Objects, the Worker that holds the stack's state, and
   // the telemetry Worker's workers.dev address
@@ -273,12 +273,14 @@ async function form(
 
 /** Asks Cloudflare to revoke `token`: Cloudflare's error, or undefined when it took the request.
  *  Never throws. */
-const revoke = async (token: string | undefined) =>
+const revoke = async (token: string | undefined, options?: Parameters<typeof form>[2]) =>
   token
     ? (
-        await form(`${OAUTH}/revoke`, { token, client_id: CLIENT_ID }).catch((error: unknown) => ({
-          error: String(error),
-        }))
+        await form(`${OAUTH}/revoke`, { token, client_id: CLIENT_ID }, options).catch(
+          (error: unknown) => ({
+            error: String(error),
+          }),
+        )
       ).error
     : undefined;
 
@@ -288,6 +290,17 @@ export async function endAccess(access: Access) {
   if (access.from !== "sign-in" || access.keptIn) return;
   rmSync(KEPT, { force: true });
   await revoke(access.token);
+}
+
+/** Drops the kept device sign-in file (if any) and asks Cloudflare to revoke its token so the next
+ *  sign-in starts over. Never touches `ITERATE_CLOUDFLARE_SIGN_IN_FILE`. Never throws: it answers
+ *  Cloudflare's error when the revoke failed (the old token then lives until it ends, within the
+ *  hour), else undefined. */
+export async function dropKeptAccess(options: { file?: string; fetcher?: typeof fetch } = {}) {
+  const file = options.file || KEPT;
+  const before = existsSync(file) ? parsed(Kept, readFileSync(file, "utf8")) : undefined;
+  rmSync(file, { force: true });
+  return revoke(before?.token, options);
 }
 
 /** THE DEVICE FLOW: Cloudflare's answer with an access token, once the person approved. `show`

@@ -23,6 +23,14 @@
 // ANY CONTEXT CAN RUN AN AGENT: enable the processor `agent` (facet.ts) on it. `/agents/<name>` is
 // where `itx.agents.create` puts one, not the only place.
 //
+// THE AGENT BEGINS AT ITS START FACT: the first `agent/configured` that says `kind: "agent"`
+// (start.ts writes it; `startsTheAgent` below reads it). The agent and every request maker fold
+// NOTHING that stands before it. A context can hold the log of another agent that ran there first:
+// the platform's own agent wrote `agent/configured` and `agent/context-added` too, with another
+// meaning. Without this rule this agent would read that agent's conversation as its own inputs
+// and answer them a second time. So an input that lands before the start fact is not read: send
+// the start facts in the same append as the first input, before it (agent-start.ts does).
+//
 // THE FACTS OF ONE EXCHANGE, IN THE ORDER THEY HAPPEN (and who writes each)
 //
 //   agent/context-added                THE INPUT. Anyone writes it: a person, a script, a processor
@@ -43,16 +51,15 @@
 //                                      worker answers: agent/subagent-started or -failed.
 //
 // In the base nobody decides first: an input starts what its policy says, at once, and every script
-// runs. A subclass lets someone decide first (agent-with-decision-models.ts).
+// runs. A subclass may let someone decide first (processor.ts `inputStarts`, `scriptMayRun`).
 //
 // A request ENDS at the first of `llm-request/settled` and `llm-request/deadline-passed`. A response
 // COUNTS (its script runs) only when the request succeeded and nothing overtook it: no input came to
 // interrupt it, and no other response answered its inputs first.
 //
-// The agent's own facts keep production's names wherever production has the fact
-// (core/lib/src/agents/contract.ts). The request facts do not: they are in their own namespace,
-// `llm-request/`, and a fresh mind gets them so. A type is spelled out in full wherever it is used
-// (docs/coding-style.md): search for one, and you find every producer and every consumer.
+// The request facts are in their own namespace, `llm-request/`. A type is spelled out in full
+// wherever it is used (docs/coding-style.md): search for one, and you find every producer and every
+// consumer.
 
 import { z } from "zod";
 import { parse } from "iterate/expression";
@@ -71,10 +78,16 @@ import {
 
 /** The reducer's version. A bump re-reduces every agent's log from offset 0. That starts nothing a
  *  second time: everything the agent writes has an idempotency key that names its decision point
- *  (request n, the script of request r), and those follow from the log. */
-const AGENT_VERSION = "3";
+ *  (request n, the script of request r), and those follow from the log.
+ *
+ *  THE PREFIX IS NEEDED. A context can hold the checkpoint of an agent that the platform ran there
+ *  first (core/lib/src/agents/collection.ts, a take-over). That agent had the same slug, `agent`,
+ *  and counted its versions "1", "2", …. A facet keeps its checkpoint under the slug, and the engine
+ *  takes a checkpoint of its own version as its own state. An equal number here would make that
+ *  agent's state this one's. */
+const AGENT_VERSION = "config-5";
 
-/** What an input does to the agent's requests. Production's three behaviours. */
+/** What an input does to the agent's requests. */
 export const LlmRequestPolicy = z.object({
   behaviour: z.enum(["dont-trigger-request", "after-current-request", "interrupt-current-request"]),
 });
@@ -156,6 +169,32 @@ export const AgentConfig = z.object({
          *  only where the request leaves through the mind's egress. */
         fetcher: ItxExpressionText.nullable().default(null),
         headers: z.record(z.string(), z.string()).default({}),
+        /** WHAT PAYS, IN ORDER. Each entry is a way straight to the provider's API that is taken
+         *  when its `secret` is set in the mind: an owner's own key, a plan. A request takes the
+         *  FIRST entry whose secret is set. With none set, and with no entry, it takes the
+         *  provider's own way above: its `baseUrl`, or its AI binding. So a mind whose owner
+         *  connected nothing pays with its AI Gateway, and a key that the owner connects later
+         *  pays from the next request on. A request that fails does not try the next entry
+         *  itself. But an entry whose server answers that the credential cannot pay now (HTTP
+         *  401, 402, 403, 429) is passed over for ten minutes when another way can pay: the
+         *  agent's retry of that failed request takes the next entry, or the provider's own way
+         *  (llm-api.ts `passedOver`). */
+        keys: z
+          .array(
+            z.object({
+              /** A secret of the mind, by its path: `/secrets/openai`. */
+              secret: z.string().min(1),
+              baseUrl: z.string().min(1),
+              /** They leave through the facet's own `fetch`, the mind's egress, which makes a
+               *  `getSecret("…")` in a header the secret. */
+              headers: z.record(z.string(), z.string()),
+            }),
+          )
+          .default([]),
+        /** ONLY THE KEYS PAY. With true, a request never takes the provider's own way: a mind
+         *  whose owner pays with a plan or a key, and with nothing else, spends no credit of its AI
+         *  Gateway. When no key is set the request is refused, and its words name the secrets. */
+        onlyKeysPay: z.boolean().default(false),
         /** `openai-responses` only: a WebSocket that stays open between requests. */
         webSocket: z
           .object({ url: z.string().min(1), authorization: z.string().min(1) })
@@ -172,11 +211,12 @@ export const AgentConfig = z.object({
   /** The AI Gateway of a provider with no `baseUrl`. (A mind enrolled in iterate Cloud gets the
    *  Cloud's gateway whatever it names.) */
   aiGateway: z.object({ id: z.string().min(1).default("default") }).prefault({}),
-  /** What an input that names no policy of its own does to a request that is open: wait for it,
-   *  or interrupt it. */
-  llmRequestPolicy: z
-    .object({ behaviour: z.enum(["after-current-request", "interrupt-current-request"]) })
-    .default({ behaviour: "after-current-request" }),
+  /** What an input of role `user` or `developer` that names no policy of its own does: wait for
+   *  the open request, interrupt it, or START NOTHING (`dont-trigger-request`). With the last, the
+   *  mind's own code decides which input starts a request: an input that must start one says so in
+   *  its own policy, and for any other the mind's code appends `agent/llm-request-triggered`. A
+   *  gate on words between agents is built so. A script's result still starts the next request. */
+  llmRequestPolicy: LlmRequestPolicy.default({ behaviour: "after-current-request" }),
   /** How long the agent waits between wanting a request and asking, so that more context can be
    *  added to the same request. 0 asks at once. */
   llmRequestDebounceMs: z.number().int().nonnegative().default(0),
@@ -226,8 +266,8 @@ export const AgentConfig = z.object({
       keepNewestItems: z.number().int().nonnegative().default(6),
     })
     .prefault({}),
-  /** US dollars for a million tokens, by model. OpenAI's are production's
-   *  (core/lib/src/agents/pricing.ts, OpenAI's price page on 18 November 2026). Anthropic's and
+  /** US dollars for a million tokens, by model. OpenAI's are from OpenAI's price page on
+   *  18 November 2026. Anthropic's and
    *  Google's are this repository's lab values of 20 November 2026, not checked against a price page.
    *  A model with no price here is counted in tokens and not in dollars: a new provider's models get
    *  theirs by `agent/configured`. */
@@ -262,9 +302,15 @@ export const AgentConfig = z.object({
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
-/** THE AGENT'S ONE INPUT, as a payload: words, a role, the files it names, and what they start. */
+/** THE AGENT'S ONE INPUT, as a payload: words, a role, the files it names, and what they start.
+ *
+ *  THE ROLE says whose words they are. `user` and `developer` start a request unless the policy
+ *  says not to. `assistant` is something that was said in the agent's name (a greeting that the
+ *  mind's code showed a person): the model reads it as its own earlier words. `system` is read as
+ *  `developer` context: the agent's instructions are its config, not an input. Those two start a
+ *  request only when their own `llmRequestPolicy` says so. */
 const ContextAdded = z.object({
-  role: z.enum(["user", "developer"]),
+  role: z.enum(["user", "developer", "assistant", "system"]),
   content: z.string(),
   llmRequestPolicy: LlmRequestPolicy.optional(),
   /** Files in the mind's file store, by reference. The request maker inlines the bytes of the
@@ -285,7 +331,7 @@ const Ancestor = z.object({
 const events = {
   "events.iterate.com/agent/configured": {
     description:
-      "Merges a partial configuration into the agent's config: omitted keys keep their values, and a patch the schema refuses changes nothing. `kind: \"agent\"` marks the fact that the agent's start writes (start.ts): by it the mind's code knows that the context runs this agent.",
+      "Merges a partial configuration into the agent's config: omitted keys keep their values, and a patch the schema refuses changes nothing. `kind: \"agent\"` marks the fact that the agent's start writes (start.ts): the first one is where the agent begins (`startsTheAgent`), and by it the mind's code knows that the context runs this agent.",
     payloadSchema: z.object({
       config: z.record(z.string(), z.unknown()),
       kind: z.literal("agent").optional(),
@@ -293,7 +339,7 @@ const events = {
   },
   "events.iterate.com/agent/context-added": {
     description:
-      "THE AGENT'S ONE INPUT: something the model should know, from anyone, in words. `llmRequestPolicy` says whether it starts a request, interrupts the open one, or is only read by the next; with none, the agent's own `llmRequestPolicy` decides. `files` names files in the mind's file store, by reference. The sender is the platform's stamp `source.origin`: an input of role `user` that another context wrote reads `[from <origin>]` first. An integration writes `source`, the raw fact the words were made from.",
+      "THE AGENT'S ONE INPUT: something the model should know, from anyone, in words. `llmRequestPolicy` says whether it starts a request, interrupts the open one, or is only read by the next; with none, the agent's own `llmRequestPolicy` decides for the roles `user` and `developer`, and the roles `assistant` and `system` start nothing. `files` names files in the mind's file store, by reference. The sender is the platform's stamp `source.origin`: an input of role `user` that another context wrote reads `[from <origin>]` first. An integration writes `source`, the raw fact the words were made from.",
     payloadSchema: ContextAdded,
   },
   "events.iterate.com/agent/context-copied": {
@@ -343,7 +389,7 @@ const events = {
   },
   "events.iterate.com/agent/summary-updated": {
     description:
-      "What the agent says about itself, each field merged: `activity` is what it does now, `title` and `description` what it is. Production's fact: the chat's round headers, the agent list and a call read it. The agent's script appends it, its activity as its first line, with no await.",
+      "What the agent says about itself, each field merged: `activity` is what it does now, `title` and `description` what it is. The platform's fact (core/lib/src/agents/contract.ts): the chat's round headers, the agent list and a call read it. The agent's script appends it, its activity as its first line, with no await.",
     payloadSchema: z.object({
       activity: z.string().min(1).optional(),
       title: z.string().min(1).max(200).optional(),
@@ -439,6 +485,9 @@ export const AgentContract = defineProcessorContract({
   description:
     "An agent, in any context: reads inputs from anyone, writes what it asks a model, runs the script of the response, and keeps its history affordable. It appends facts and does nothing else.",
   stateSchema: z.object({
+    /** WHERE THE AGENT BEGINS: the offset of its start fact (`startsTheAgent`), or null on a context
+     *  that no start fact has reached. Nothing before it is folded. */
+    startedAtOffset: z.number().int().positive().nullable().default(null),
     config: AgentConfig.prefault({}),
     /** The agent's context path, from its own events: the prompt cache key of its requests, unless
      *  `config.llm.promptCacheKey` names another. */
@@ -600,7 +649,19 @@ export const AgentContract = defineProcessorContract({
 
 export type AgentState = ProcessorState<typeof AgentContract>;
 
-// ── two pure rules on the vocabulary, which the agent and every request maker share ──
+// ── three pure rules on the vocabulary, which the agent and every request maker share ──
+
+/** THE START FACT: an `agent/configured` that says `kind: "agent"` (start.ts writes it). The first
+ *  one on a context is where this agent begins. It is the ONE definition of "this context runs the
+ *  agent": the agent and the request makers fold nothing before it, and the mind's code reads the
+ *  agent's `startedAtOffset`, or this rule on the context's own facts. */
+export function startsTheAgent(event: { type: string; payload?: unknown }): boolean {
+  return (
+    event.type === "events.iterate.com/agent/configured" &&
+    isRecord(event.payload) &&
+    event.payload.kind === "agent"
+  );
+}
 
 /** A partial config merged into the config, one level deep; a result the schema refuses changes
  *  nothing. Every processor that reads `agent/configured` folds it by this rule. */

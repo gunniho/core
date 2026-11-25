@@ -18,8 +18,8 @@
 //
 // The stack generates four keys (three with an external mind) and keeps one owner-created
 // telemetry API token in state, when it is given one. With a token it makes the telemetry
-// tables; with none it makes their bucket and streams, and the mind can make the tables itself
-// with a secret of its own (core/configs/default/telemetry.ts). It makes no OAuth client: a
+// tables; with none it makes their bucket and streams and no tables, and the mind reads
+// Cloudflare's own datasets and `metrics` through `itx.telemetry.query`. It makes no OAuth client: a
 // member connects the mind to the account through Cloudflare's MCP server, for which the mind is
 // its own client (core/configs/default/cloudflare.ts).
 // An owner signs in first with a code mailed to their address, by the mind or by Cloudflare
@@ -34,6 +34,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { domainOfOwnerEmailPattern } from "iterate/mind-config";
 import { z } from "zod";
 import { AccessTeam } from "./access-team.ts";
 import { ArtifactsNamespace } from "./artifacts-namespace.ts";
@@ -68,6 +69,8 @@ const sharedConfigOf = (config: MindConfig) => ({
   controlPlaneHostname: config.controlPlaneHostname,
   zones: config.cloudflare.zones,
   ownerEmails: config.ownerEmails,
+  // absent with no pattern: JSON leaves it out, so such a mind's variable is as it was
+  ownerEmailPatterns: config.ownerEmailPatterns?.length ? config.ownerEmailPatterns : undefined,
   topology: config.topology,
 });
 /** A stream's fields, as a file of core/telemetry-worker/schemas lists them. */
@@ -104,8 +107,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     //   - "given": one owner-created TelemetryToken kept in state.
     //   A deploy takes no new token, so a stack's mode never changes from "off".
     //   - "off": no token. The bucket, the streams and the OTLP destinations are made, and no
-    //     catalog, sink or pipeline: the mind can make those itself, with a secret of its own
-    //     (core/configs/default/telemetry.ts). A stream with no pipeline keeps what it is sent,
+    //     catalog, sink or pipeline. A destroy removes the ones that the mind's own code made
+    //     (./mind-made-telemetry-tables.ts). A stream with no pipeline keeps what it is sent,
     //     and a pipeline made later writes it into the table (measured on 20 Nov 2026).
     const telemetryBucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
       name: names.telemetryBucket,
@@ -304,8 +307,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // ── Cloudflare Access proves an owner's address: one application, at one path ──
     // An owner with no passkey yet opens that path. Cloudflare mails a code to the address, from
     // its own domain, and then signs a token that names the address. The auth Worker checks the
-    // token itself (core/auth-worker/src/access-sign-in.ts). The policy names the owners alone:
-    // nobody else gets a code, so no other person ever takes a seat of the account's team.
+    // token itself (core/auth-worker/src/access-sign-in.ts). The policy names the owners alone,
+    // each by address, and every address at the domain of an owner email pattern: nobody else
+    // gets a code, so no other person ever takes a seat of the account's team.
     // Its name is the control plane's hostname: Cloudflare's code page says "Log in to <name>"
     // to the owner. A new name changes the application in place, and its `aud` stays.
     const accessTeam = yield* AccessTeam("AccessTeam");
@@ -325,7 +329,12 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         {
           name: "owners",
           decision: "allow",
-          include: config.ownerEmails.map((email) => ({ email })),
+          include: [
+            ...config.ownerEmails.map((email) => ({ email })),
+            ...(config.ownerEmailPatterns || []).map((pattern) => ({
+              emailDomain: { domain: domainOfOwnerEmailPattern(pattern) },
+            })),
+          ],
           require: [{ loginMethod: accessTeam.pinLoginId }],
         },
       ],

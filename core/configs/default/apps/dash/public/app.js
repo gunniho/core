@@ -40,6 +40,7 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   LockKeyholeIcon,
+  PlugIcon,
   SettingsIcon,
   ShieldCheckIcon,
   SparklesIcon,
@@ -47,6 +48,7 @@ import {
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
 import { CALL_FACET } from "./call-facet.js";
+import { DashMcp } from "./mcp-page.js";
 import { endLink, makeLink } from "./share-links.js";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
@@ -144,6 +146,13 @@ const pages = [
     serves: "telemetry",
     component: DashAnalytics,
   },
+  {
+    id: "mcp",
+    name: "MCP",
+    about: "Connect coding agents over MCP — stays up even if you brick the userspace web UI.",
+    icon: PlugIcon,
+    component: DashMcp,
+  },
   { id: "settings", name: "Settings", icon: SettingsIcon, component: DashSettings },
 ];
 
@@ -224,8 +233,9 @@ const foot = [
 // Personal items inside the account popover above Sign out.
 const accountLinks = [{ name: "Your sessions", href: `${stack}/sessions`, icon: HistoryIcon }];
 
-// The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open,
-// or the rail of icons for a first arrival at the onboarding agent). A choice they made wins.
+// The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open
+// by default, or collapsed when `#sidebar=collapsed` / `?sidebar=collapsed` is in the URL). A
+// choice they made wins.
 const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collapsed";
 
 // The mind's name and icon, as its owner wrote them (profile.ts, the folder profile/ of the

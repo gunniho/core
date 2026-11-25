@@ -76,15 +76,16 @@ apps/<name>/
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
   (`memberItx()` of `@iterate-com/ui/live`, in `apps/dash/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
-- **An MCP server of your own that runs scripts as the member.** `apps/mcp/` mounts the mind's own
-  MCP server on `mcp.<zone>/mcp` in `worker.ts`, with its `initialize` instructions and `run`
-  description in `apps/mcp/app.ts` (change them there, or pass your own to `mcpApp(...)`). Any
-  other app may serve MCP too (`apps/guestbook/mcp.ts` shows the protocol and the sign-in). It hands
-  a member's `tools/call` of `run` to the platform with `host.auth.mcpRun(request, message)`: the
-  platform runs the script as the member the request was stamped with, as at the mind's own `/mcp`,
-  never with the worker's reach. The run's own record (`itx/run-requested` on `/`) shows the member
-  as `source.principal` and the host as `source.via.appPage`; what the script appends shows them as
-  `source.onBehalfOf.principal` and `source.onBehalfOf.via.appPage`.
+- **An MCP server of your own that runs scripts as the member.** An app may serve MCP itself, with
+  its own instructions and its own description of `run` (`apps/guestbook/mcp.ts` shows the
+  protocol and the sign-in). It hands a member's `tools/call` of `run` to the platform with
+  `host.auth.mcpRun(request, message)`: the platform runs the script as the member the request was
+  stamped with, as at the mind's own `/mcp`, never with the worker's reach. The run's
+  own record (`itx/run-requested` on `/`) shows the member as `source.principal` and the host as
+  `source.via.appPage`; what the script appends shows them as `source.onBehalfOf.principal` and
+  `source.onBehalfOf.via.appPage`. `apps/mcp/` is such a server for a host of its own
+  (`mcpApp()` in `apps/mcp/app.ts`), and `worker.ts` does not mount it: the mind's MCP server is
+  the platform's, `https://iterate.<zone>/mcp`.
 - **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
   signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the
   facet then appends shows them as `source.onBehalfOf`: `principal`, `grant`, `via` when they
@@ -112,8 +113,9 @@ active last. Its sidebar lists the agents active last above the foot rows (`Appr
 `Settings`, which opens `/settings` listing the mind's pages, access pages and apps); the account
 popover holds `Your sessions` and `Sign out`, and clicking the mind header returns Home.
 `apps/dash/public/app.js` is its contents, and it is yours to change: the list
-of pages (pages with `row: false` stay routable and appear on Settings), the apps and access pages
-it links to, and what the mind says first in an agent's empty chat (`openers`). `Dash` and its
+of pages (pages with `row: false` stay routable and appear on Settings) and the apps and access
+pages it links to (an optional `openers` map on the `agents` row can also seed an empty agent's
+first turn, though the default config does not set one). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
 
@@ -219,7 +221,7 @@ Dash shows what it registered and links to its page.
 ## Onboarding
 
 `apps/onboarding/` is a centered, no-AI setup wizard that gets a new owner from a fresh deploy into
-their Dash chat with `/agents/onboarding`. This repo keeps its routes and its steps; the page
+their Dash chat with `/agents/main`. This repo keeps its routes and its steps; the page
 (`index.html`, `public/`), the agent's guides and the cards of the Tasks board are the repo
 `/repos/onboarding`, which a new mind starts with. Every request on `onboarding.<zone>` that the
 app does not answer goes to the worker of that repo at its newest commit (`pageFromRepo` in
@@ -233,9 +235,9 @@ app does not answer goes to the worker of that repo at its newest commit (`pageF
    adds an OpenAI API key (`itx.secrets.collectFromUser`), connects a ChatGPT Plus/Pro plan
    (`npx iterate@latest chatgpt connect <mind>`), or uses Cloudflare AI Gateway credit.
 3. **Verify & wake:** a loading gate that runs a real server-side test LLM inference request
-   (`POST /verify-ai`), triggers the idempotent opener on `/agents/onboarding`, and waits for the
+   (`POST /verify-ai`), triggers the idempotent opener on `/agents/main`, and waits for the
    onboarding agent's first assistant response before redirecting to
-   `https://dash.<zone>/agents/agents/onboarding`.
+   `https://dash.<zone>/agents/agents/main`.
 
 The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`contract.ts`), and
 every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,

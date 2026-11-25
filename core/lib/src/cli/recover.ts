@@ -17,8 +17,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as p from "@clack/prompts";
 import { z } from "zod";
+import { isOwnerEmail } from "../mind-config.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
+  type Cloudflare,
   cloudflare,
   cloudflareAccess,
   endAccess,
@@ -52,7 +54,34 @@ export const recoveryStatements = (recovery: { owner: string; ticketHash: string
   },
 ];
 
-export async function recoverOwner(input: { domain: string; owner: string; yes?: boolean }) {
+/** THE ONE ZONE OF THE MIND, by its domain, narrowed to `account` (an account id) when given. */
+export async function zoneForRecovery(cf: Cloudflare, domain: string, account?: string) {
+  const query = new URLSearchParams({ name: domain });
+  if (account) query.set("account.id", account);
+  const zones =
+    resultOf(
+      z.array(z.object({ id: z.string(), account: z.object({ id: z.string() }) })),
+      await cf("GET", `/zones?${query}`),
+    ) || [];
+  if (zones.length > 1)
+    throw new Error(
+      `This access to Cloudflare reaches ${zones.length} domains named ${domain} (accounts ${zones.map((candidate) => candidate.account.id).join(", ")}): pass --account <id> to choose one.`,
+    );
+  if (zones.length === 0)
+    throw new Error(
+      account
+        ? `This access to Cloudflare reaches no domain named ${domain} in account ${account}.`
+        : `This access to Cloudflare reaches 0 domains named ${domain}: a mind is found by its one domain.`,
+    );
+  return zones[0]!;
+}
+
+export async function recoverOwner(input: {
+  domain: string;
+  account?: string;
+  owner: string;
+  yes?: boolean;
+}) {
   p.intro("𝑖  iterate recover: a way back in for an owner with no passkey");
   try {
     const domain = input.domain.toLowerCase();
@@ -65,16 +94,7 @@ export async function recoverOwner(input: { domain: string; owner: string; yes?:
     const cf = cloudflare(access.token);
 
     // the mind is found by its zone: the zone's account, and the boundary Worker in its routes
-    const zones =
-      resultOf(
-        z.array(z.object({ id: z.string(), account: z.object({ id: z.string() }) })),
-        await cf("GET", `/zones?name=${domain}`),
-      ) || [];
-    const zone = zones.length === 1 ? zones[0] : undefined;
-    if (!zone)
-      throw new Error(
-        `This access to Cloudflare reaches ${zones.length} domains named ${domain}: a mind is found by its one domain.`,
-      );
+    const zone = await zoneForRecovery(cf, domain, input.account?.trim());
     const { account } = zone;
     const routes =
       resultOf(
@@ -86,9 +106,9 @@ export async function recoverOwner(input: { domain: string; owner: string; yes?:
       .find(Boolean);
     const mind = stageName && (await deployedMind(cf, account.id, stageName));
     if (!mind) throw new Error(`No mind is at ${domain}: no route there names a mind's boundary.`);
-    if (!mind.ownerEmails.includes(owner))
+    if (!isOwnerEmail(mind, owner))
       throw new Error(
-        `${owner} is no owner of the mind at ${mind.controlPlaneHostname}. Its owners: ${mind.ownerEmails.join(", ")}. The command is for an owner alone: an owner makes a link for another member on the mind's page /members.`,
+        `${owner} is no owner of the mind at ${mind.controlPlaneHostname}. Its owners: ${[...mind.ownerEmails, ...(mind.ownerEmailPatterns || [])].join(", ")}. The command is for an owner alone: an owner makes a link for another member on the mind's page /members.`,
       );
     const databaseName = `iterate-${mind.stageName}-auth-db`;
     const database = resultOf(

@@ -67,6 +67,12 @@ export type SignInOptions = {
   flow?: LoginFlow;
   print?: (line: string) => void;
   openBrowser?: (url: URL) => void | Promise<void>;
+  /** A page that leads to the issuer's own page (cli/oauth.ts `oauthLogin`, cli/device-login
+   *  `deviceLogin`): a new mind's first sign-in, which adds the owner's first passkey on the way. */
+  through?: (issuerPage: string) => string;
+  /** The browser flow: where the browser goes on after the sign-in, and how long it may take. */
+  then?: string;
+  waitMs?: number;
 };
 
 /** SIGN IN to `mind`'s issuer for `resource` and store the session. The device flow when it is
@@ -88,11 +94,15 @@ export async function signInToMind(
         deviceName: `iterate CLI on ${hostname()}`,
         print,
         colors: showsColors(process.stderr.isTTY, process.env),
+        through: options.through,
       })
     : await oauthLogin({
         mind,
         resource,
         openBrowser: options.openBrowser || ((url) => openForSignIn(url, print)),
+        through: options.through,
+        then: options.then,
+        waitMs: options.waitMs,
       });
   writeSession(resource, session);
   return session;
@@ -128,29 +138,35 @@ export async function mindToken(input: {
   const stored = readSession(resource);
   if (stored && !endsWithinTheMinute(stored)) return stored.token;
   if (stored?.refreshToken) {
-    try {
-      // ONE AT A TIME (cli/config.ts `withSessionsLock`), and the file is read again inside: a
-      // process that waited finds the sign-in that the first one renewed, or finds none that can
-      // be renewed (null: the sign-in below).
-      const token = await withSessionsLock(async () => {
-        const now = readSession(resource);
-        if (now && !endsWithinTheMinute(now)) return now.token;
-        if (!now?.refreshToken) return null;
+    // ONE AT A TIME (cli/config.ts `withSessionsLock`), and the file is read again inside: a
+    // process that waited finds the sign-in that the first one renewed, or finds none that can
+    // be renewed (null: the sign-in below).
+    const token = await withSessionsLock(async () => {
+      const now = readSession(resource);
+      if (now && !endsWithinTheMinute(now)) return now.token;
+      if (!now?.refreshToken) return null;
+      try {
         const refreshed = await refreshOAuthSession({ resource, session: now });
         writeSession(resource, refreshed);
         return refreshed.token;
-      });
-      if (token) return token;
-    } catch (error) {
-      // Only the issuer's `invalid_grant` says the grant ended, and then nothing is worth keeping
-      // (cli/oauth.ts `tokenResponse` carries the issuer's error as the cause). A timeout or a 5xx
-      // is passing: the session stays, and the caller hears of the failure.
-      const refusal = error instanceof Error ? error.cause : undefined;
-      const ended = refusal instanceof ResponseBodyError && refusal.error === "invalid_grant";
-      if (!ended) throw error;
-      removeSession(resource);
-      if (input.signIn === false) throw error;
-    }
+      } catch (error) {
+        // Only the issuer's `invalid_grant` or `invalid_client` says the stored sign-in is gone
+        // (the grant ended, or the mind was reinstalled and no longer knows this OAuth client),
+        // and then nothing stored is worth keeping (cli/oauth.ts `tokenResponse` carries the
+        // issuer's error as the cause). A timeout or a 5xx is passing: the session stays, and the
+        // caller hears of the failure. Still under the lock, so the session removed is the one
+        // whose refresh was refused, never one that another process stored since.
+        const refusal = error instanceof Error ? error.cause : undefined;
+        const ended =
+          refusal instanceof ResponseBodyError &&
+          (refusal.error === "invalid_grant" || refusal.error === "invalid_client");
+        if (!ended) throw error;
+        removeSession(resource);
+        if (input.signIn === false) throw error;
+        return null;
+      }
+    });
+    if (token) return token;
   }
   if (input.signIn === false)
     throw new Error(`Not signed in to ${input.address}. Run \`iterate login ${input.address}\`.`);

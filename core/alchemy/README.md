@@ -87,48 +87,55 @@ is `www.<zone>`. Each subsequent stack deploy refreshes the image. Visitors rece
 inside the page. Requests for a favicon or Apple touch icon on the control plane redirect to
 the corresponding public site asset. `--page-favicon default` restores the Iterate favicon.
 
+`"ownerEmailPatterns": ["*@company.example"]` names more owners by pattern: every address at
+exactly that domain (no sub-domain) is an owner, with all that an owner may do. Such a person
+proves the address through Cloudflare Access, whose policy then names the whole domain, and adds a
+passkey. So whoever holds a mailbox at the domain, or runs its mail, can become an owner: name a
+domain only when its mail is the company's own, and never a zone of the mind. Each person who
+proves an address takes a seat of the account's Zero Trust team. A person who left keeps the
+passkey that they added, whatever their mail provider does: an owner blocks that address on
+`/members`, which ends that one person (no member, no session, no way back in) while the block is
+there. `iterate deploy --owner-email-patterns none` takes the pattern away for everyone. A mail or a Slack message from a verified address
+at the domain counts as a member's. Absent: the owners are `ownerEmails` alone.
+
 Every Worker of the stack keeps every log line and, by default, every trace in Cloudflare's own
 Workers Logs. `"telemetry": { "traceSampling": 0.1 }` keeps the trace of one request in ten (from 0
 to 1; Cloudflare's head sampling rate). `iterate deploy --trace-sampling 0.1` writes it, and
 `--trace-sampling default` goes back to every trace. On iterate.com on 21 Nov 2026, spans were
 about 86 % of what the store took in.
 
-Each mail to an address at a zone reaches the mind: the boundary stores its files under the mind's
-`/email/`, and a failure there fails the delivery, so Cloudflare delivers again. Then the mind's
-config gets it while the delivery is live, in its `email` method (iterate/sdk
-`IterateConfigEntrypoint`). There `save()` records it on `/integrations/email` (`email/received`);
-a save that the mind does not take fails the delivery too. A mail is off the log only when the
-config's `email` returns without saving it; when the hook throws, runs out of time or is missing,
-or the mind cannot be reached for it, the boundary records the mail itself, with an
-`email/hook-failed` fact beside it. `forward(to)` sends the original on, as it arrived, with Email Routing's
-own forward: its From is the sender's, so a reply goes to the sender.
+Each mail to an address at a zone reaches the mind: the boundary has the mind store its files
+under `/email/` and append `events.iterate.com/email/received` on `/integrations/email`. A failure
+there fails the delivery, so Cloudflare delivers again. No code of the mind's config runs in the
+delivery: the config gets the mail as that event, in `processEvent`. To send the original on, as
+it arrived, the config appends `events.iterate.com/email/forward-requested` (`{ raw, to }`) there.
+The boundary's handler stays open for such requests for 10 s after the receipt, and forwards
+with Email Routing's own forward: its From is the sender's, so a reply goes to the sender.
 
 - The address must be a verified destination address of the account's Email Routing: add it in
   the dashboard (Email Routing, Destination addresses) and confirm the link Cloudflare mails to it.
-- Cloudflare forwards only a mail whose sender is proven. `forward` throws a coded error instead of
-  forwarding: NOT_FORWARDABLE, FORWARDED_BEFORE (a mail goes to one address once, and never to an
-  address that its `X-Forwarded-To` names, so an address that leads back makes no loop), REFUSED
-  (Cloudflare's words) or EXPIRED (after the delivery, or after the hook's time).
-- Each forward is an `events.iterate.com/email/forwarded` fact. The boundary gives the hook 15 s
-  of its own time: the clock stops while Cloudflare answers a forward, which took 3 to 10 s on
-  19 Nov 2026. A forward whose answer does not come within 20 s more is the same fact with
-  `answered: false`. A hook that throws, that runs past its own time, or that the mind could not
-  be reached for, and a config with no `email` (one fact for each config commit), are
-  `events.iterate.com/email/hook-failed` facts, and the boundary records the mail: the delivery
-  stands, unless the mind does not take that record.
+- Cloudflare forwards only a mail whose sender is proven. A forward that does not happen is an
+  `events.iterate.com/email/forward-failed` fact with why: Cloudflare's words, or the boundary's
+  own, which start "not forwarded:" (a mail never goes to an address that its `X-Forwarded-To`
+  names, so an address that leads back makes no loop; a request that no code at the root wrote).
+- Each forward is an `events.iterate.com/email/forwarded` fact, one for each mail and address.
+  Cloudflare answered a forward after 3 to 10 s on 19 Nov 2026. A forward whose answer does not
+  come within 20 s after the requests' time is the same fact with `answered: false`.
+- When the 10 s are up, the mind appends `events.iterate.com/email/forward-requests-closed` for
+  the mail. A request on the log before that fact is served; one after it gets no answer: the
+  message is gone. Nothing
+  that the config does or fails to do fails a delivery.
 
 **The older way, which goes:** with `"mail": { "forwardTo": "team@example.org" }` the boundary
-forwards each mail there itself, before the config's hook and through the same forward, so the
-hook cannot forward the same mail there again. Such a stack records every mail on the log before
-its forward, whatever its config's hook does: a record after the forward could fail the delivery
-after the copy went, and the redelivery would forward a second copy; and a refused forward fails
-the delivery before the hook runs, which must not cost the mail its place on the log. The config refuses an address at a zone of the
+forwards each mail there itself, before the mind's requests and through the same forward, so a
+request for that address forwards nothing more. A refused forward fails the delivery after the
+mail is on the log. The config refuses an address at a zone of the
 mind: its mail would come back. Each forward that fails is an
 `events.iterate.com/email/forward-failed` fact, with Cloudflare's words; a mail whose sender is not
 proven stays in the mind alone, and the delivery stands. **The cost of a forward address that does
 not work:** while the address is not verified, is removed from the account, or refuses mail, every
 mail to the mind fails for its sender: the mind keeps the mail, the delivery fails, the sender gets
-it back, and the config's hook does not run. A mind's config forwards in its own `email` instead.
+it back. A mind's config asks for its forwards by event instead.
 
 `mindId` is the SHA-256 of the mind's signed genesis record (`iterate/mind-identity`). The stack
 signs and checks nothing with it: every Worker gets it as config, and the auth Worker accepts the
@@ -167,10 +174,11 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   - **`given`:** the state holds `TelemetryToken`, an owner-created token: the stack keeps using
     it. **Do not delete or roll it:** the sinks keep the token they were made with.
   - **`off`:** neither. The stack makes the telemetry bucket, the three streams and the OTLP
-    destinations, and no catalog, sink, pipeline or token. The mind makes and reads its tables
-    itself, with a token kept as its secret `/secrets/cloudflare-telemetry`
-    (core/configs/default/telemetry.ts); the streams keep what they are sent until then. A
-    destroy removes what the mind made (`src/mind-made-telemetry-tables.ts`).
+    destinations, and no catalog, sink, pipeline or token. The stack has no `events`, `logs` or
+    `spans` table: its mind reads Cloudflare's own datasets and `metrics` through
+    `itx.telemetry.query`, with no token. Until 25 Nov 2026 a mind could turn its tables on with
+    a member's token: a destroy removes what such a mind made
+    (`src/mind-made-telemetry-tables.ts`).
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,

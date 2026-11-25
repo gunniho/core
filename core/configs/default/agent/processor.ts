@@ -21,7 +21,9 @@
 //
 // A RESPONSE IS ONE `<codemode>` BLOCK AND NOTHING ELSE. No tool is declared. The agent runs the
 // block's script and says no words itself: words reach someone only when the script appends them,
-// and the model learns how from a prompt fragment (fragments.ts).
+// and the model learns how from a prompt fragment (fragments.ts). The conversation keeps a response
+// as far as its closing tag: a model that goes on after `</codemode>` writes the next message
+// itself, a script's result that no script gave, and the agent must never read that back.
 //
 // THE AGENT KEEPS NO SCRIPT RESULT. The log is the agent's notebook: a result is a fact, its offset
 // is its number, and a later script reads it by that number. script-envelope.ts is the code that
@@ -30,8 +32,8 @@
 // NO GATE. An input starts what its policy says, at once. `agent/llm-request-triggered` starts a
 // request now, whoever writes it. Every script runs. The next request waits
 // for the script of a response. Each of these is one small protected method (`inputStarts`,
-// `scriptMayRun`, `wakeTimesMs`): a subclass changes one. agent-with-decision-models.ts lets
-// someone decide first; agent-with-background-scripts.ts lets the chain go on past a slow script.
+// `scriptMayRun`, `wakeTimesMs`): a subclass changes one, to let someone decide first, or to let
+// the chain go on past a slow script. The template holds no such subclass.
 //
 // EVERY WAIT HAS A STATED END, written as a schedule fact in the log: a request's deadline, a retry's
 // back-off, the debounce, a request no processor takes. Nothing sleeps.
@@ -49,6 +51,7 @@ import {
 import {
   AgentContract,
   mergedConfig,
+  startsTheAgent,
   type AgentEventInput,
   type AgentState,
   type LlmRequestBehaviour,
@@ -70,7 +73,7 @@ type LlmRequestResult = Extract<
 
 export class Agent extends StreamProcessor<AgentState, AgentEvent> {
   /** A subclass with facts or state of its own puts its own contract here, one that lists this one
-   *  in its `processorDeps` (agent-with-decision-models.ts). */
+   *  in its `processorDeps`. */
   readonly contract = AgentContract;
   /** RUNTIME STATE, gone with the host and never read by a rule: what this incarnation has
    *  appended and not yet read back, so that it writes nothing twice. */
@@ -78,15 +81,23 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
 
   /** THE FOLD. Each case is one fact; the last line is the convention: the state says what is owed. */
   override reduce({ event, state: previous }: ReduceArgs<AgentState, AgentEvent>): AgentState {
+    // NOTHING BEFORE THE START FACT IS THE AGENT'S (contract.ts): another agent's log can stand there
+    if (previous.startedAtOffset === null && !startsTheAgent(event)) return previous;
     const nowMs = Math.max(previous.nowMs, Date.parse(event.createdAt));
-    let state: AgentState = { ...previous, path: event.path, nowMs };
+    const startedAtOffset = previous.startedAtOffset || event.offset;
+    let state: AgentState = { ...previous, startedAtOffset, path: event.path, nowMs };
     switch (event.type) {
       case "events.iterate.com/agent/configured":
         state = { ...state, config: mergedConfig(state.config, event.payload.config) };
         break;
       case "events.iterate.com/agent/context-added": {
-        const { llmRequestPolicy } = event.payload;
-        const behaviour = llmRequestPolicy?.behaviour || state.config.llmRequestPolicy.behaviour;
+        const { role, llmRequestPolicy } = event.payload;
+        // what was said in the agent's name, and the system's words, start nothing by themselves
+        const ofRole =
+          role === "user" || role === "developer"
+            ? state.config.llmRequestPolicy.behaviour
+            : "dont-trigger-request";
+        const behaviour = llmRequestPolicy?.behaviour || ofRole;
         state = contextAdded(state, event);
         if (behaviour !== "dont-trigger-request")
           state = this.inputStarts(state, event.offset, behaviour);
@@ -212,8 +223,7 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
     ];
   }
 
-  /** The requests to make now. A subclass that asks several models at once returns more
-   *  (agent-with-hedged-llm-requests.ts). */
+  /** The requests to make now. A subclass that asks several models at once returns more. */
   protected llmRequestsOwed(state: AgentState): Obligation[] {
     const { model } = state.config.llm;
     const scripts = this.scriptsAsked();
@@ -263,22 +273,24 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
 
 type ContextAdded = Extract<AgentEvent, { type: "events.iterate.com/agent/context-added" }>;
 
+/** HOW AN INPUT OF EACH ROLE STANDS IN THE CONVERSATION. `tag` is the bucket its size is counted
+ *  in: a person's words and other context are counted apart in every request's `inputChars`. What
+ *  was said in the agent's name stands as a response, so every API shape writes it as the
+ *  assistant's (an API shape sends no file of a response). The system's words are developer context. */
+const ITEM_OF_ROLE = {
+  user: { role: "user", tag: "words" },
+  developer: { role: "developer", tag: "context" },
+  system: { role: "developer", tag: "context" },
+  assistant: { role: "assistant", tag: "llm-response" },
+} as const;
+
 /** THE INPUT enters the conversation at its own offset, with the files it names. What it starts is
  *  decided apart from this (`Agent.inputStarts`). */
 function contextAdded(state: AgentState, event: ContextAdded): AgentState {
   const { role, content, files } = event.payload;
-  // a person's words and other context are counted apart in every request's `inputChars`
-  const tag = role === "user" ? "words" : "context";
   const from = role === "user" ? senderOf(event) : null;
   const text = from ? `[from ${from}]\n${content}` : content;
-  const item = {
-    atOffset: event.offset,
-    rank: 0,
-    tag,
-    role,
-    text,
-    files,
-  } as const;
+  const item = { atOffset: event.offset, rank: 0, ...ITEM_OF_ROLE[role], text, files };
   return fromOutside(withItem(state, item), event);
 }
 
@@ -289,9 +301,17 @@ type ContextCopied = Extract<
 
 /** A FORKED SUBAGENT'S COPY OF ITS PARENT'S CONVERSATION: its items stand first, in their order,
  *  with every field as it was, so the first request begins with the parent's bytes. The parts
- *  arrive in order, in one append. It starts nothing. */
+ *  arrive in order, in one append. It starts nothing.
+ *
+ *  A response in the copy is kept as the parent keeps its own (`codemodeBlockOf`): a copy that an
+ *  earlier reducer version made holds all that the model wrote. Not so the note of an interrupted
+ *  response in such a copy: it stays as it was copied, with what the response had written. */
 function contextCopied(state: AgentState, copied: ContextCopied): AgentState {
-  const copiedItems = copied.part === 0 ? copied.items : [...state.copiedItems, ...copied.items];
+  const items = copied.items.map((item) => {
+    const kept = item.tag === "llm-response" ? keptTextOf(item.text) : item.text;
+    return kept === item.text ? item : { ...item, text: kept, providerItems: undefined };
+  });
+  const copiedItems = copied.part === 0 ? items : [...state.copiedItems, ...items];
   return { ...state, copiedItems, lineage: copied.lineage };
 }
 
@@ -449,7 +469,9 @@ function llmRequestEnded(
   if (overtaken === "superseded") return next; // the response that won is in the conversation
   if (overtaken === "interrupted-by-user-input") {
     // the next request sees what was written so far, and that it was interrupted
-    const partial = result.status === "succeeded" ? result.text : result.partialText || "";
+    const partial = keptTextOf(
+      result.status === "succeeded" ? result.text : result.partialText || "",
+    );
     const text = partial
       ? `${INTERRUPTED_NOTE}\nWhat you had written so far:\n${partial}`
       : INTERRUPTED_NOTE;
@@ -481,7 +503,7 @@ function answered(
   read: ScriptsRead,
 ): AgentState {
   const { usage, providerItems } = result;
-  const { scripts, refused, note } = read;
+  const { scripts, refused, note, kept } = read;
   const llmRequestOffset = request.requestOffset;
   const price = state.config.prices[request.model];
   const silent = scripts.length === 0 && !refused;
@@ -490,9 +512,10 @@ function answered(
     rank: 0,
     tag: "llm-response",
     role: "assistant",
-    // what the model wrote, as it wrote it: another model reads it so
-    text: result.text,
-    providerItems,
+    // what the model wrote, as it wrote it: another model reads it so. A response that went on
+    // after its closing tag is kept as far as the tag, as text: the model's own items hold all.
+    text: kept || result.text,
+    providerItems: kept ? undefined : providerItems,
     providerModel: request.model,
   });
   // what the model is told of this response next time: why nothing ran, or a note on it. A note
@@ -987,8 +1010,8 @@ const SUMMARY_ASK =
   "RULE DOES NOT APPLY TO THIS ANSWER: write no `<codemode>` block and no code. Answer with the " +
   "summary only, in plain words.";
 
-/** HOW TO WRITE A SCRIPT: production's `<codemode>` tag (core/lib/src/agents/codemode-format.ts),
- *  stricter. The block is the whole response: no words around it, no attributes on it. It says
+/** HOW TO WRITE A SCRIPT: one `<codemode>` block. The block is the whole response: no words
+ *  around it, no attributes on it. It says
  *  nothing of how words reach a person: a prompt fragment says that (fragments.ts). */
 const CODEMODE_INSTRUCTIONS = [
   "YOUR RESPONSE IS ONE SCRIPT AND NOTHING ELSE: exactly one `<codemode>` block. Its first line is",
@@ -1010,28 +1033,59 @@ const ONE_BLOCK_RULE =
   "A response is exactly one `<codemode>` block and nothing else: its first line is `<codemode>`, " +
   "with no attributes, and its last line is `</codemode>`. To do nothing, answer with nothing.";
 
+/** What the model is told of what it wrote after its closing tag, once the script ran and once
+ *  nothing ran. */
+const A_RESULT_IS_NEVER_IN_A_RESPONSE =
+  "no script wrote it. A script's result reaches you in a message after your response, never in it.";
 const TEXT_AFTER_NOTE =
-  "Your last response had text after its closing `</codemode>` line. Only a single `<codemode>` " +
-  "block is allowed per response, with nothing before or after it: its script ran, and that text " +
-  "reached nobody.";
+  "Your last response had text after its closing `</codemode>` line. A response is a single " +
+  "`<codemode>` block, with nothing before or after it. Its script ran. The text after it reached " +
+  `nobody and is not kept in this conversation: ${A_RESULT_IS_NEVER_IN_A_RESPONSE}`;
+const NOT_KEPT_NOTE =
+  "What stood after its first closing `</codemode>` reached nobody and is not kept in this " +
+  `conversation: ${A_RESULT_IS_NEVER_IN_A_RESPONSE}`;
 
 /** A line that opens a block (`<codemode>`, with attributes or none, or after a closing tag on the
- *  same line), and one that closes it. Line-anchored: a mention inside a line opens nothing. */
+ *  same line), one that closes it, and one that begins with the closing tag, alone or not.
+ *  Line-anchored: a mention inside a line opens and closes nothing. */
 const OPEN_LINE = /^[ \t]*(<\/codemode>[ \t]*)?<codemode(\s[^>]*)?>[ \t]*$/;
 const CLOSE_LINE = /^[ \t]*<\/codemode>[ \t]*$/;
+const CLOSE_TAG_FIRST = /^[ \t]*<\/codemode>/;
 
 /** THE ONE `<codemode>` BLOCK OF A RESPONSE. The script is everything between the first line and
  *  the LAST `</codemode>` line, so a `</codemode>` inside a template literal does not cut it short.
  *  An empty response is silence. A response that is not one block runs nothing: `refused` says
- *  why. Text after the block: the block runs, and `note` tells the model next time. */
+ *  why. Text after the block: the block runs, and `note` tells the model next time.
+ *
+ *  WHAT IS KEPT (`kept`) is read from the text alone, whether the response runs or not. What
+ *  stands after a closing tag is where a model that goes on writes a script's result itself, so
+ *  the conversation never keeps it: a response that ran is kept as far as its closing line, and a
+ *  refused one as far as its first closing tag, also when the model went on on that tag's own
+ *  line.
+ *
+ *  WHICH RESPONSES RUN MUST STAY WHAT IT WAS. A new reducer version reads every log again, and a
+ *  script that an earlier version refused has no fact that says it ran: a rule here that lets it
+ *  run would run it then, days later. Change what is kept and what is told, never what runs. */
 function codemodeBlockOf(text: string): ScriptsRead {
   const trimmed = text.trim();
   if (!trimmed) return { scripts: [] };
   const lines = trimmed.split("\n");
-  const refused = (problem: string) => ({
-    scripts: [],
-    refused: `Nothing of your last response ran: ${problem}.\n${ONE_BLOCK_RULE}`,
-  });
+  /** The response as far as the closing tag at line `at`, when something stands after the tag. */
+  const keptThrough = (at: number) => {
+    const after = [lines[at]?.replace(CLOSE_TAG_FIRST, "") ?? "", ...lines.slice(at + 1)];
+    if (at < 1 || !after.join("\n").trim()) return {};
+    return { kept: [...lines.slice(0, at), "</codemode>"].join("\n") };
+  };
+  const firstTag = lines.findIndex((line, at) => at > 0 && CLOSE_TAG_FIRST.test(line));
+  const refused = (problem: string) => {
+    const cut = keptThrough(firstTag);
+    const told = cut.kept ? `${problem}. ${NOT_KEPT_NOTE}` : `${problem}.`;
+    return {
+      scripts: [],
+      refused: `Nothing of your last response ran: ${told}\n${ONE_BLOCK_RULE}`,
+      ...cut,
+    };
+  };
   if (lines[0].trim() !== "<codemode>") {
     if (OPEN_LINE.test(lines[0])) return refused("its `<codemode>` tag had attributes");
     return lines.some((line) => OPEN_LINE.test(line))
@@ -1039,18 +1093,23 @@ function codemodeBlockOf(text: string): ScriptsRead {
       : refused("it held no `<codemode>` block");
   }
   const close = lines.findLastIndex((line) => CLOSE_LINE.test(line));
-  if (close < 1) return refused("its `<codemode>` block was never closed");
+  if (close < 1)
+    return firstTag < 1
+      ? refused("its `<codemode>` block was never closed")
+      : refused("text followed its closing `</codemode>` on the same line");
   const body = lines.slice(1, close);
   if (body.some((line) => OPEN_LINE.test(line)))
     return refused("it held a second `<codemode>` block");
   const script = body.join("\n").trim();
   if (!script) return refused("its `<codemode>` block was empty");
-  const after = lines
-    .slice(close + 1)
-    .join("\n")
-    .trim();
-  return after ? { scripts: [script], note: TEXT_AFTER_NOTE } : { scripts: [script] };
+  const cut = keptThrough(close);
+  return cut.kept ? { scripts: [script], note: TEXT_AFTER_NOTE, ...cut } : { scripts: [script] };
 }
+
+/** A response's text as the conversation keeps it (`ScriptsRead.kept`), for a text that is no
+ *  response of this agent's own: a copy of a parent's response, and what an interrupted response
+ *  had written. */
+const keptTextOf = (text: string) => codemodeBlockOf(text).kept || text;
 
 /** EVERYTHING A PROCESSOR NEEDS TO MAKE THE REQUEST. An answer reads every item there is; a summary
  *  reads the same history through its barrier, with the same instructions and tools (so the
@@ -1114,6 +1173,10 @@ export type ScriptsRead = {
   refused?: string;
   /** A note for the model's next request, which starts no request by itself. */
   note?: string;
+  /** The response as the conversation keeps it, when that is less than the model wrote: as far as
+   *  its closing tag. What stands after the tag reached nobody, and it is where a model that runs
+   *  on writes a script's result itself: kept, the agent would later answer from it. */
+  kept?: string;
 };
 
 // ── small helpers ──

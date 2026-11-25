@@ -36,6 +36,7 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "call-facet.js",
+    "mcp-page.js",
     "share-links.js",
   ]);
   // the onboarding page is the repo /repos/onboarding (core/repos/onboarding), loaded the same way
@@ -124,14 +125,11 @@ test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
   const mounted = [...worker.matchAll(/^ +case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["dash", "docs", "mcp", "meet", "onboarding", "tasks"]);
+  expect(mounted).toEqual(["dash", "docs", "meet", "onboarding", "tasks"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );
-  // dash is this app itself; mcp is the MCP protocol endpoint, not a browser app
-  expect(linked.toSorted()).toEqual(
-    mounted.filter((host) => host !== "dash" && host !== "mcp").toSorted(),
-  );
+  expect(linked.toSorted()).toEqual(mounted.filter((host) => host !== "dash").toSorted());
 });
 
 const ORIGIN =

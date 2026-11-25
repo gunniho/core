@@ -17,7 +17,7 @@ set up, and you query its logs and traces. You change nothing in the account wit
 
 - `await itx.config.cloudflareConnect({ tell: "<your own path>" })` answers `{ link, nonce }`.
   Give a member the ONE `link`, in the turn that made it: it lasts an hour. `tell` is the agent
-  that asks (`/agents/onboarding`): when the consent has landed, that agent gets a note that
+  that asks (`/agents/main`): when the consent has landed, that agent gets a note that
   starts its turn, and the page brings the member back to its chat.
 - The mind is its own client at the MCP server: no OAuth client is made in the account, and
   nobody pastes a token. The client id is the URL of a document that the mind serves on its
@@ -180,7 +180,8 @@ member makes a token with "Billing Read" alone, and gives it to the mind.
 
 ## Telemetry
 
-A mind deployed with no telemetry token turns its tables on and reads them itself, with a token
-at `/secrets/cloudflare-telemetry` (telemetry.ts; onboarding/telemetry.md of /repos/onboarding).
+A mind deployed with no telemetry token has no telemetry tables (`events`, `logs`, `spans`). It
+reads Cloudflare's own datasets and `metrics` through `itx.telemetry.query`, with no token
+(onboarding/telemetry.md of /repos/onboarding).
 
 The streams keep what they received since the deploy that made them.

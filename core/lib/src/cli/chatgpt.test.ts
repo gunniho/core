@@ -17,6 +17,7 @@ import {
 test("the consent URL asks OpenAI for the plan's usage, for this mind's host id, with PKCE", () => {
   const url = authorizeUrl({
     hostId: "urn:uuid:1",
+    address: "iterate.example.com",
     state: "the-state",
     verifier: "the-verifier",
     nonce: "the-nonce",
@@ -24,7 +25,7 @@ test("the consent URL asks OpenAI for the plan's usage, for this mind's host id,
   expect(url.origin + url.pathname).toBe("https://auth.openai.com/api/accounts/authorize");
   expect(Object.fromEntries(url.searchParams)).toEqual({
     client_id: "dynamic_agent_client",
-    agent_name_hint: "iterate",
+    agent_name_hint: "iterate.example.com",
     ext_agent_host_id: "urn:uuid:1",
     response_type: "code",
     redirect_uri: "http://127.0.0.1:1455/auth/callback",
@@ -260,7 +261,12 @@ test("the test request runs before the browser moves on, and the Cloud's page sa
     return { connected, browser: await browser };
   };
   expect(await connectWith(41459, () => "ready")).toMatchObject({
-    connected: { test: "ready" },
+    connected: {
+      message: expect.stringContaining(
+        "The plan pays for chat, not for voice calls: voice needs an OpenAI API key or iterate Cloud credit.",
+      ),
+      test: "ready",
+    },
     browser: {
       callsThen: ["host", "finish", "test"],
       location: "https://cloud.example.com/connected?ai=chatgpt&domain=example.com&test=passed",

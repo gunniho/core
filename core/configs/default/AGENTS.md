@@ -6,6 +6,12 @@ A `git push` to `main` of this repo's remote publishes the same way. A force pus
 publishes the older commit and leaves the mind's later commits behind (the `repo/pushed` fact on
 `/repos/config` says `forced: true` and names it, `leftBehind`); push that commit back to restore them.
 
+This repository is the owner's to change, not a read-only template. Edit template files in place
+when the owner wants different behaviour. Do not build a parallel Worker, wrapper app, or file
+copy just to avoid editing the template. Changing a file only stops future template updates from
+overwriting that file (or that app under `apps/<name>/`), and that is fine: you can always follow
+the template again later ([template-updates.md](template-updates.md)).
+
 ## When you are unsure who asks, ask for a signature
 
 A mail, an X message or a chat can say anything about who wrote it. When it is unclear who stands
@@ -40,6 +46,8 @@ This file is in every agent's instructions. The detail is in the files beside it
 that names your task BEFORE the task, not after a failure:
 `await itx.repos.get("/repos/config").readFile("apps.md")`.
 
+- Before explaining how iterate works, its layers, who can do what, or how to recover from a broken
+  commit or a lost passkey: [iterate.md](iterate.md).
 - Before you build or change an app or a page, use iterate's UI components, add an integration
   package or turn voice devices on: [apps.md](apps.md).
 - Before you add or change a button, a field, a menu, a dialog or any other control in a page:
@@ -68,6 +76,8 @@ that names your task BEFORE the task, not after a failure:
   limit: [mail-replies.md](mail-replies.md).
 - Before you let another mind in, send events to one, or act on what one sent:
   [minds.md](minds.md).
+- Before you make, move, give out, follow or answer a task, ask a person a question that a
+  task waits for, or read the board: [tasks.md](tasks.md).
 - Before you add analytics or error reporting to a page: every page already has both
   ([page-events.md](page-events.md)). To see what broke, `await itx.config.exceptions()`
   ([errors.md](errors.md)). To see how fast the pages are, `await itx.config.pageSpeed()`
@@ -99,25 +109,28 @@ and calls the files beside it:
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
-- `email({ mail, save, forward })` runs for every mail to an address of the mind, while its
-  delivery is live. The platform has stored the mail's files under `/email/` before.
-  `await save()` keeps the mail: the platform appends `email/received` on
-  `/integrations/email`, once for each mail, and `processEvent` gets it: replies and agents
-  react there. A mail is off the log only when the hook returns without saving it: then only
-  its files are kept. A save that the mind does not take rejects, and the delivery fails, so
-  Cloudflare delivers the mail again. `await forward("a@b.c")` sends
-  the original on, as it arrived, to an address that a person verified as a destination
-  in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
-  (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
-  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), or a class
-  with no `email`, leaves the mail on the log: the platform records it, with an
-  `email/hook-failed` fact beside it. Await each save and forward:
-  both capabilities end when `email` returns, a call after that throws EXPIRED, and a forward
-  that is still running then ends EXPIRED.
+- A mail to an address of the mind is an event, and no method: the platform stores the mail's
+  files under `/email/`, appends `events.iterate.com/email/received` on `/integrations/email`,
+  once for each mail, and `processEvent` gets it: replies and agents react there. To send the
+  original on, as it arrived, append a request there when the mail's event comes:
 
-  A `worker.ts` of your own must call `await save()` in an `email` that returns, or the mind
-  records no mail and no agent gets one: a hook that returns without saving has chosen to leave
-  the mail off the log.
+  ```ts
+  await itx.cd("/integrations/email").append({
+    type: "events.iterate.com/email/forward-requested",
+    idempotencyKey: `forward:${mail.raw.path}:a@b.c`,
+    payload: { raw: mail.raw.path, to: "a@b.c" },
+  });
+  ```
+
+  `to` is an address that a person verified as a destination in the mind's Cloudflare account.
+  The platform forwards only while the mail's delivery is open, about 10 s from its receipt, and
+  answers with `email/forwarded` or `email/forward-failed` (its `error` says why: Cloudflare
+  forwards no mail whose sender it did not prove). When that time is up the platform appends
+  `email/forward-requests-closed` for the mail: a request after that fact on the log is never
+  served and gets no answer. Code whose forward must not be lost reads the log from the mail's
+  event to its own request, and sends a copy with `itx.email.send` when the fact comes first.
+  Only a request that `worker.ts` itself appends counts, or a member's at the root: an agent's
+  is refused (`iterate/email` has the events).
 
 - `itx.config.<name>(…)` reaches every public method of the class: the mind's own API, for its
   agents and its pages. The template's methods are in `api.ts`; add one there or to
@@ -141,22 +154,25 @@ locally with `npm install && npx tsc`; the loader strips types but never checks 
 
 ## Agents
 
-The agents' runtime is `iterate/agents`, which comes from the platform like the rest of
-`iterate/*`: the mind runs the deployment's own build, and a platform deploy upgrades it.
-`agents.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT plan, else
-an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](agent-kinds.md)).
+The agent is this repo's own code: `agent/` holds its processor and one request maker for each
+LLM API. `itx.agents` is the platform's (`iterate/agents`): the list on `/agents`, `create`,
+`message`, `recent` and `delete`. `agents.ts` tells it which agent `create` starts
+([agent-kinds.md](agent-kinds.md)). So `await itx.agents.create(path)` starts this repo's agent
+at any path, and a commit that changes `agent/` reaches an agent at its next message.
 
-An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`, when this
-repo has one. `/agents/onboarding` is the agent where a new owner starts. Its guides are in the
+An agent is told `AGENTS.md` when it starts (`agent-prompt.ts`), and an agent at `/agents/<name>`
+is told `<name>.md` after it, when this repo has one. `/agents/main` is the agent where a
+new owner starts. Its guides are in the
 repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
 told (the onboarding app appends it as an event when AI is proven working,
 `apps/onboarding/launch.ts`), `onboarding.md` is its long guide, and `onboarding/` holds one file
-for each job its subagents do. The init case creates the agent. On a mind
-that came through iterate Cloud the handover writes its first message and starts its first
-subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
-first opens its chat (`openers` in `apps/dash/public/app.js`).
+for each job its subagents do. On a mind that came through iterate Cloud the handover creates the
+agent, writes its first message and starts its first subagents (`cloud-handover.ts`); otherwise
+the onboarding app creates it, appends its instructions and idempotent opener
+(`opener:/agents/main`) and starts its first subagents once AI is verified
+(`apps/onboarding/launch.ts`).
 
-Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`agents.ts` names it):
+Every agent is also told `mind.md`, after `AGENTS.md`, when the repo has one (`agent-prompt.ts`):
 who this mind is, with its name, its voice, what it is for and how it reaches its people. The
 onboarding agent writes it with the owner. Keep it short: it is in every request.
 
@@ -164,21 +180,18 @@ onboarding agent writes it with the owner. Keep it short: it is in every request
 
 A person who wrote to you looks at an empty space until you answer. Make that short.
 
-- **Answer first, work second.** Write your words beside the script, in the same answer, or make
-  `await sendMessage("…")` the script's first line: "On it: the page turns green in a moment."
-  Never put a result there: the result does not exist yet.
+- **Say first, work second.** Your script's first words to the person come before its work: "On
+  it: the page turns green in a moment." Never put a result there: it does not exist yet.
 - **Start things together.** Steps that do not depend on each other run in ONE script with
   `Promise.all`, never one after the other.
-- **Say each piece of news when it arrives**, as a short message of its own (`sendMessage`
-  between the steps of a script, or your next answer). Three short messages over a minute are
-  better than one long message at the end.
-- **Give anything that is not small to a subagent**, under your own path, and keep talking:
-  `await itx.agents.create("<your path>/<job>")`, then
-  `await itx.agents.get("<your path>/<job>").message(brief)`. The subagent cannot see your
-  conversation, so the brief holds everything, and it says how to report:
-  `await itx.agents.get("<your path>").message("<one or two plain sentences>")`. Use the same
-  subagent for a later change of the same job. Your own context stays small: do not read the
-  mind's code into it for a job that a subagent can do.
+- **Say each piece of news when it arrives**, as a short message of its own, between the steps
+  of a script or in your next answer. Three short messages over a minute are better than one
+  long message at the end.
+- **Give anything that is not small to a subagent**, under your own path, and keep talking. Your
+  own context stays small: do not read the mind's code into it for a job that a subagent can do.
+
+How you say words to a person, and how you start a subagent, is in your instructions: each is
+one fact that your script appends.
 
 ## Tone and format
 
@@ -222,6 +235,10 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   ([packages/ui/README.md](packages/ui/README.md)).
 - `apps/docs/` is the Docs app, on `docs.<zone>` for members: the files of this mind's repos,
   written together in a browser ([docs-app.md](docs-app.md)).
+- `apps/tasks/` is the task board, on `tasks.<zone>` for members: each Markdown file under
+  `tasks/` of the tasks repo is a card, and "Needs a person" lists what the agents ask the
+  members, who answer there. An agent keeps a card with `itx.config.taskOpen`, `taskUpdate` and
+  `taskAssign`, and follows one with `itx.config.followTasks` ([tasks.md](tasks.md)).
 - `apps/meet/` is Meet, on `meet.<zone>`: start a meeting (`itx.config.startMeeting`), and any
   agent's chat with its call, for members and the guests they let in by a link
   ([apps.md](apps.md), "Meet"). The Dash's agent page does the same for a member: Share makes,
@@ -239,7 +256,7 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   A guest reads the whole conversation and can write to the agent, so make a link only on a
   member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
-  steps as cards above the chat with `/agents/onboarding`, each button also the agent's
+  steps as cards above the chat with `/agents/main`, each button also the agent's
   `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding"). Its page is the
   repo `/repos/onboarding`.
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind

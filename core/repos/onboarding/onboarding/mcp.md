@@ -4,18 +4,20 @@ The owner should come away with: their own Claude or Codex can use the mind, and
 
 ## Ready today
 
-- The mind's own MCP server is at `https://mcp.<zone>/mcp` (served by `apps/mcp/` in `/repos/config`,
-  so the mind can customize its instructions and `run` description), with one tool, `run`: a script,
+- The mind is an MCP server at `https://<control-plane hostname>/mcp`, with one tool, `run`: a script,
   `async (itx) => { … }`, run at the mind's root as the person signed in. Every run is logged.
-  Opening `https://mcp.<zone>/mcp` in a browser shows the Claude and Claude Code connect commands
-  (the Dash no longer has an `/mcp` page; `https://<control-plane hostname>/mcp` also remains
-  available as the platform endpoint).
-- Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with `https://mcp.<zone>/mcp`.
-- Claude Code: `claude mcp add --transport http <name> https://mcp.<zone>/mcp`, where `<name>` is
-  `mcp-<zone with hyphens>` (such as `mcp-example-com` for `example.com`). Then, inside Claude Code:
-  `/mcp`, pick `<name>`, Authenticate.
-- Codex CLI: `codex mcp add <name> --url https://mcp.<zone>/mcp`, then `codex mcp login <name>`.
-  The owner signs in to the mind the first time their assistant uses it.
+  Opening `https://<control-plane hostname>/mcp` in a browser shows the Claude and Claude Code
+  connect commands, and so does the Dash's MCP page.
+- Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with that address.
+- `npx iterate deploy` offers to add the server to Claude Code, Codex, Grok and Antigravity on the
+  computer it ran on, so the owner's assistant may have it already: ask before giving a command.
+  `npx iterate mcp <claude|codex|grok|agy>` prints the command for one of them.
+- Claude Code: `claude mcp add --scope user --transport http <name> https://<control-plane hostname>/mcp`, where
+  `<name>` is the control-plane hostname with a hyphen for each dot (`iterate-example-com` for
+  `iterate.example.com`). Then, inside
+  Claude Code: `/mcp`, pick `<name>`, Authenticate.
+- Codex CLI: `codex mcp add <name> --url https://<control-plane hostname>/mcp`, then
+  `codex mcp login <name>`. The owner signs in to the mind the first time their assistant uses it.
 
 ## Not ready
 
@@ -55,7 +57,7 @@ return {
 };
 ```
 
-Tell them in a few lines what was added; offer to take any of it out (`/agents/onboarding/mind-md`).
+Tell them in a few lines what was added; offer to take any of it out (`/agents/main/mind-md`).
 
 ## Customise me by copy and paste
 
@@ -69,7 +71,7 @@ paste into it:
 > me. Short plain statements, at most 30 lines, in one block I can copy.
 
 They paste its answer back into the chat. It is the owner's own message, so it is their word:
-give it to the subagent `/agents/onboarding/mind-md` to append to `mind.md` under a new heading
+give it to the subagent `/agents/main/mind-md` to append to `mind.md` under a new heading
 `## From <the assistant's name>, <today's date>`, in one commit, as it stands. Then tell them
 in a few lines what was added, as below.
 

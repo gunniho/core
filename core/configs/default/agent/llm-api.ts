@@ -85,6 +85,7 @@ import {
   costUsd,
   mergedConfig,
   ScheduleEventCatalog,
+  startsTheAgent,
 } from "./contract.ts";
 import {
   ConversationItem,
@@ -124,7 +125,8 @@ export type LlmApi = {
     path(modelName: string): string;
     /** Through the gateway the model is named by `itx.ai.run`; straight to a server, in the body. */
     modelInBody: boolean;
-    headers?: Record<string, string>;
+    /** The headers this body goes with, under the provider's own (`llmProviders.<name>.headers`). */
+    headers?(body: Record<string, unknown>): Record<string, string>;
   };
   /** A way of its own to its model for this attempt, or null for the gateway or the `baseUrl`. */
   transport?(attempt: {
@@ -167,6 +169,8 @@ export type LlmRequestBody = {
 export type LlmTransport = {
   /** Written into the attempt's facts before the bytes leave: `gateway`, `direct`, `websocket`. */
   name: string;
+  /** The key that pays the attempt, as the path of its secret (a provider's `keys`), when one does. */
+  key?: string;
   /** Sends the body and gives the API's events one by one. It ends when the answer has ended, and
    *  throws when the attempt's signal aborts. */
   events(body: Record<string, unknown>): AsyncIterable<ProviderEvent>;
@@ -214,11 +218,11 @@ export type LlmApiDeps = {
 
 /** THE LARGEST FILE A REQUEST INLINES, in bytes. An image of this size is under Anthropic's limit
  *  of 10 MB in base64. */
-const MAX_INLINE_FILE_BYTES = 7_000_000;
+export const MAX_INLINE_FILE_BYTES = 7_000_000;
 
 /** The reducer's version. A bump re-reduces the log from offset 0, which starts nothing again:
  *  a request that has its settled fact is not open. */
-const LLM_API_VERSION = "5";
+const LLM_API_VERSION = "6";
 
 const emits = [
   "events.iterate.com/llm-request/attempt-started",
@@ -310,6 +314,9 @@ const llmApiContract = (api: Pick<LlmApi, "name" | "events">) =>
     version: LLM_API_VERSION,
     description: `Makes the agent's LLM requests whose provider speaks ${api.name}, and writes what came back. It owns the facts of the namespace \`${api.name}/\`.`,
     stateSchema: z.object({
+      /** Where the agent begins: the offset of its start fact (contract.ts `startsTheAgent`), or
+       *  null. As the agent does, a request maker folds nothing before it. */
+      startedAtOffset: z.number().int().positive().nullable().default(null),
       /** The agent's config, folded from the same facts the agent folds: the providers, the
        *  gateway, the idle time, the attempts a request gets, the prices. */
       config: AgentConfig.prefault({}),
@@ -429,6 +436,8 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
   /** THE FOLD: the requests whose provider speaks this API, while they have no end. A fact about
    *  any other request changes nothing, so the state is not written again for it. */
   override reduce({ event, state: previous }: ReduceArgs<LlmApiState, LlmApiEvent>): LlmApiState {
+    // nothing before the agent's start fact is this agent's: another agent's config can stand there
+    if (previous.startedAtOffset === null && !startsTheAgent(event)) return previous;
     let state = previous;
     const open = (requestOffset: number) =>
       state.requests.some((request) => request.requestOffset === requestOffset);
@@ -438,7 +447,11 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
       );
     switch (event.type) {
       case "events.iterate.com/agent/configured":
-        state = { ...state, config: mergedConfig(state.config, event.payload.config) };
+        state = {
+          ...state,
+          startedAtOffset: state.startedAtOffset || event.offset,
+          config: mergedConfig(state.config, event.payload.config),
+        };
         break;
       case "events.iterate.com/llm-request/requested": {
         const provider = state.config.llmProviders[providerNameOf(event.payload.model)];
@@ -579,7 +592,7 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
         now,
         record,
       };
-      transport = (await api.transport?.(attemptOf)) ?? this.route(state, request, signal);
+      transport = (await api.transport?.(attemptOf)) ?? (await this.route(state, request, signal));
 
       // THE ATTEMPT STARTS, in ONE append before the bytes leave: no request reaches a model without
       // its record. The shared fact's key names the request and the attempt, so that of two
@@ -684,12 +697,17 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
       // estimated at four characters a token.
       const spent = response.usage || estimatedUsage(inputChars, response.text);
       const written = {
-        partialText: response.text,
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- an attempt that got no text writes no `partialText`, not an empty one
+        ...(response.text && { partialText: response.text }),
         ...(firstEventAtMs !== null && { usage: priced(config.prices, request.model, spent) }),
       };
       result = live.cancelledBecause
         ? { status: "cancelled", reason: live.cancelledBecause, ...written }
-        : { status: "failed", ...failureOf(error), ...written };
+        : {
+            status: "failed",
+            ...failureOf(error, await this.passedOver(state, request, transport, error)),
+            ...written,
+          };
     }
     transport?.done?.();
     await recorded;
@@ -866,25 +884,45 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
     );
   }
 
-  /** THE PROVIDER'S ROUTE, from its config. With a `baseUrl`: HTTP straight to that address,
-   *  through its fetcher. With none: through its AI binding. */
-  private route(state: LlmApiState, request: OpenRequest, signal: AbortSignal): LlmTransport {
+  /** THE PROVIDER'S ROUTE, from its config. First what pays: the first of its `keys` whose
+   *  secret is set and that is not passed over (`passedOver`), straight to that key's address
+   *  through the facet's own `fetch`. Then the
+   *  provider's own way. With a `baseUrl`: HTTP straight to that address, through its fetcher.
+   *  With none: through its AI binding. */
+  private async route(
+    state: LlmApiState,
+    request: OpenRequest,
+    signal: AbortSignal,
+  ): Promise<LlmTransport> {
     const provider = state.config.llmProviders[providerNameOf(request.model)];
-    // the provider's fetcher, else the facet's own `fetch`; with neither, the AI binding
-    const through = provider?.fetcher || this.deps.fetch;
-    if (provider?.baseUrl && through) {
+    const key = await this.firstKeySet(provider?.keys || []);
+    if (!key && provider?.onlyKeysPay) {
+      const secrets = provider.keys.map((entry) => entry.secret).join(", ") || "(it lists none)";
+      throw new LlmRequestFailure(
+        "refused",
+        `no key of the provider ${providerNameOf(request.model)} can pay, and only its keys pay (\`onlyKeysPay\`): set one of its secrets: ${secrets}`,
+      );
+    }
+    const baseUrl = key?.baseUrl || provider?.baseUrl;
+    // a key's request leaves through the facet's own `fetch`: only the mind's egress makes its
+    // header the secret. Else the provider's fetcher, or the facet's own `fetch`; with neither,
+    // the AI binding
+    const through = key ? this.deps.fetch : provider?.fetcher || this.deps.fetch;
+    if (baseUrl && through) {
       const { direct } = this.deps.api;
       const name = modelNameOf(request.model);
-      const url = `${provider.baseUrl.replace(/\/$/, "")}${direct.path(name)}`;
-      const headers = {
-        "content-type": "application/json",
-        ...direct.headers,
-        ...provider.headers,
-      };
+      const url = `${baseUrl.replace(/\/$/, "")}${direct.path(name)}`;
       return {
         name: "direct",
+        ...(key && { key: key.secret }),
         events: (body) => {
           const sent = direct.modelInBody ? { model: name, ...body } : body;
+          const headers = {
+            "content-type": "application/json",
+            ...direct.headers?.(body),
+            // a key that pays brings its own headers; else the provider's
+            ...(key ? key.headers : provider?.headers),
+          };
           const init = { method: "POST", headers, body: JSON.stringify(sent) };
           return this.directEvents(state, through, url, init, signal);
         },
@@ -893,6 +931,69 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
     // a state that was written before the field existed names no binding
     const ai = provider?.cloudflareAiBinding || CLOUDFLARE_AI_BINDING;
     return { name: "gateway", events: (body) => this.aiEvents(state, request, ai, body, signal) };
+  }
+
+  /** WHAT PAYS: the first of a provider's `keys` whose secret is set in the mind, or none. One
+   *  read of the mind's secrets for each path (`itx.secrets.describe`), kept for
+   *  `SECRET_SET_KEPT_MS`: a request costs no read, and a key that the owner connects, or takes
+   *  away, counts within that time. A read that fails counts as "not set" and is not kept: the
+   *  request takes the next way, and the next request reads again. */
+  private async firstKeySet<Key extends { secret: string }>(keys: Key[]): Promise<Key | undefined> {
+    for (const key of keys) {
+      const passedOverUntilMs = this.keysPassedOver.get(key.secret);
+      if (passedOverUntilMs && passedOverUntilMs > this.deps.now()) continue;
+      const kept = this.secretsSet.get(key.secret);
+      if (kept && this.deps.now() - kept.readAtMs < SECRET_SET_KEPT_MS) {
+        if (kept.set) return key;
+        continue;
+      }
+      try {
+        using itx = this.deps.getItx();
+        const described = await called(itx, "itx.secrets", ["describe", key.secret]);
+        const set = SecretDescribed.safeParse(described).data?.set === true;
+        this.secretsSet.set(key.secret, { set, readAtMs: this.deps.now() });
+        if (set) return key;
+      } catch (error) {
+        this.deps.report({
+          event: "llm-api.secret-read-failed",
+          secret: key.secret,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return undefined;
+  }
+  /** RUNTIME STATE, gone with the host: which of the mind's secrets are set, and when it was read. */
+  private readonly secretsSet = new Map<string, { set: boolean; readAtMs: number }>();
+
+  /** RUNTIME STATE, gone with the host: the keys that could not pay, each with the time until which
+   *  a request passes it over. */
+  private readonly keysPassedOver = new Map<string, number>();
+
+  /** A KEY THAT CANNOT PAY NOW IS PASSED OVER. The attempt went out with a key of the provider's
+   *  `keys`, and the server answered that this credential cannot serve the request now: it is not
+   *  let in (401, 403), it is not paid for (402), or it is at its limit (429: a plan's usage, a
+   *  key's quota or its rate). The request itself fails, with that answer on the log. For
+   *  `KEY_PASSED_OVER_MS` the requests of this host take the next key that is set, or the provider's
+   *  own way: the agent's ordinary retry of a failed request is the first of them. Then the key is
+   *  tried again. Any other failure (a 5xx, a broken stream) says nothing about the key: the retry
+   *  takes the same key. A KEY IS PASSED OVER ONLY WHEN ANOTHER WAY CAN PAY: where only the keys pay
+   *  (`onlyKeysPay`) and no other key is set, the failure stays what the server said, and a retry
+   *  takes the same key. The key's secret path, or null. */
+  private async passedOver(
+    state: LlmApiState,
+    request: OpenRequest,
+    transport: LlmTransport | null,
+    error: unknown,
+  ): Promise<string | null> {
+    const key = transport?.key;
+    const cannotPay = error instanceof LlmRequestFailure && CANNOT_PAY.includes(error.status || 0);
+    if (!key || !cannotPay) return null;
+    const provider = state.config.llmProviders[providerNameOf(request.model)];
+    const others = (provider?.keys || []).filter((other) => other.secret !== key);
+    if (provider?.onlyKeysPay && !(await this.firstKeySet(others))) return null;
+    this.keysPassedOver.set(key, this.deps.now() + KEY_PASSED_OVER_MS);
+    return key;
   }
 
   /** THE WAY STRAIGHT TO A SERVER: one HTTP request to the provider's `baseUrl`. `through` is the
@@ -963,6 +1064,15 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
 /** ONE CALL ON AN ITX EXPRESSION: the expression's steps after its root, then `call`, walked on
  *  the context's scope as one pipelined chain (iterate/expression). With `itx.ai` and a `run`
  *  step, it is `itx.ai.run(…)`. */
+/** How long the answer "is this secret set" is kept (`firstKeySet`). */
+const SECRET_SET_KEPT_MS = 60_000;
+/** The HTTP answers that mean "this credential cannot serve the request now" (`passedOver`). */
+const CANNOT_PAY = [401, 402, 403, 429];
+/** How long a key that could not pay is passed over. */
+const KEY_PASSED_OVER_MS = 10 * 60_000;
+/** What `itx.secrets.describe(path)` answers, the part read here. */
+const SecretDescribed = z.object({ set: z.boolean() });
+
 function called(itx: LlmApiItx, expression: string, call: ItxExpressionStep): Promise<unknown> {
   return Promise.resolve(walkStepsOnRpcStub(itx, [...parse(expression).slice(1), call]));
 }
@@ -1295,7 +1405,9 @@ function base64Of(bytes: Uint8Array): string {
 
 // ── an HTTP answer, as the API's events ──
 
-/** Server-sent events, or one JSON body, as the API's events, one by one. */
+/** Server-sent events, or one JSON body, as the API's events, one by one. The content-type says
+ *  which. An answer with none says it by its first character: one JSON body starts with `{` or `[`,
+ *  and server-sent events never do. OpenAI sends a ChatGPT plan token's stream with no content-type. */
 async function* httpEvents(
   response: Response,
   idleMs: number,
@@ -1305,12 +1417,18 @@ async function* httpEvents(
   const reader = response.body?.getReader();
   if (!reader) throw new LlmRequestFailure("transport", "the answer has no body");
   const decoder = new TextDecoder();
-  const eventStream = response.headers.get("content-type")?.includes("text/event-stream");
+  const contentType = response.headers.get("content-type");
+  let eventStream = contentType ? contentType.includes("text/event-stream") : null;
   let buffered = "";
   try {
     for (;;) {
       const { value, done } = await unlessIdleOrAborted(reader.read(), idleMs, signal);
       buffered += decoder.decode(value, { stream: !done });
+      if (eventStream === null) {
+        const start = buffered.trimStart();
+        if (start === "" && !done) continue; // nothing to tell them apart by yet
+        eventStream = !start.startsWith("{") && !start.startsWith("[");
+      }
       if (!eventStream && !done) continue; // one JSON body: read it whole
       const lines = eventStream ? buffered.split("\n") : [];
       if (eventStream) buffered = done ? "" : (lines.pop() ?? "");
@@ -1335,11 +1453,21 @@ function httpFailure(status: number, text: string): LlmRequestFailure {
   const passes = !spendRule && (status === 408 || status === 429 || status >= 500);
   const kind = CONTEXT_WINDOW.test(text) ? "context-window" : passes ? "provider" : "refused";
   // (the gateway's refusal of a field lists the fields the model takes: kept whole)
-  return new LlmRequestFailure(kind, `HTTP ${status}: ${text.slice(0, 1_500)}`);
+  return new LlmRequestFailure(kind, `HTTP ${status}: ${text.slice(0, 1_500)}`, status);
 }
 
-function failureOf(error: unknown) {
+/** A failure as the settlement says it. `passedOverKey`: the key that could not pay and is passed
+ *  over from here (`LlmApiProcessor.passedOver`). Such a failure is tried again, whatever its
+ *  status: the next request takes another way. */
+function failureOf(error: unknown, passedOverKey: string | null) {
   const errorMessage = error instanceof Error ? error.message : String(error);
+  if (passedOverKey) {
+    const minutes = KEY_PASSED_OVER_MS / 60_000;
+    return {
+      failureKind: "provider" as const,
+      errorMessage: `${errorMessage} [the key ${passedOverKey} cannot pay now: for ${minutes} minutes a request takes the next way]`,
+    };
+  }
   const failureKind =
     error instanceof LlmRequestFailure ? error.failureKind : ("transport" as const);
   return { failureKind, errorMessage };
@@ -1362,9 +1490,12 @@ export const modelNameOf = (model: string) => model.slice(model.indexOf("/") + 1
  *  at once, `provider` and `transport` are tried again after the back-off. */
 export class LlmRequestFailure extends Error {
   readonly failureKind: "transport" | "provider" | "context-window" | "refused";
-  constructor(failureKind: LlmRequestFailure["failureKind"], message: string) {
+  /** The HTTP status, when the failure is an HTTP answer. */
+  readonly status?: number;
+  constructor(failureKind: LlmRequestFailure["failureKind"], message: string, status?: number) {
     super(message);
     this.failureKind = failureKind;
+    this.status = status;
   }
 }
 
