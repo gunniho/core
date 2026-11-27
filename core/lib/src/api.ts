@@ -16,6 +16,33 @@ import type {
   AiGatewayLog,
   AiGatewayPatchLog,
   AIGatewayUniversalRequest,
+  AiSearchChatCompletionsRequest,
+  AiSearchChatCompletionsResponse,
+  AiSearchConfig,
+  AiSearchCreateJobParams,
+  AiSearchInstanceInfo,
+  AiSearchItemChunksParams,
+  AiSearchItemChunksResponse,
+  AiSearchItemInfo,
+  AiSearchItemLogsParams,
+  AiSearchItemLogsResponse,
+  AiSearchJobInfo,
+  AiSearchJobLogsParams,
+  AiSearchJobLogsResponse,
+  AiSearchListInstancesParams,
+  AiSearchListItemsParams,
+  AiSearchListItemsResponse,
+  AiSearchListJobsParams,
+  AiSearchListJobsResponse,
+  AiSearchListResponse,
+  AiSearchMultiChatCompletionsRequest,
+  AiSearchMultiChatCompletionsResponse,
+  AiSearchMultiSearchRequest,
+  AiSearchMultiSearchResponse,
+  AiSearchSearchRequest,
+  AiSearchSearchResponse,
+  AiSearchStatsResponse,
+  AiSearchUploadItemOptions,
   AiWebSearchRequest,
   ConversionRequestOptions,
   ConversionResponse,
@@ -889,7 +916,8 @@ export type CfBrowserCdpOptions = { targetId?: string; timeoutMs?: number };
  *  across RPC can carry them. No RPC carries a Blob, so a file for `toMarkdown` is its bytes; and a
  *  method whose binding answers a Response (`websearch`, a gateway's `run`) answers that Response's
  *  body. The binding's `aiSearch()` and `autorag(id)` are not here: Cloudflare deprecated both for
- *  the `ai_search` bindings, and both reach every instance on the deployment's account. Nor is
+ *  the `ai_search` bindings, and both reach every instance on the deployment's account
+ *  (`itx.search` is the mind's own namespace of them). Nor is
  *  `aiGatewayLogId`, which the binding sets after each `run` and so holds whichever call ended
  *  last. */
 export type ItxAiApi = Pick<Ai, "run" | "models"> & {
@@ -1092,6 +1120,134 @@ export interface CfArtifactsApi {
   /** True when the repo existed; false when it was already gone. */
   delete(path: string): Promise<boolean>;
 }
+
+/** `itx.search`: Cloudflare AI Search, THE MIND'S OWN NAMESPACE of it (`env.SEARCH`, an
+ *  `ai_search_namespaces` binding), under the binding's own method names and options. An
+ *  INSTANCE is one index: files go in (`items.upload`, or `items.uploadFile` for a file of the
+ *  mind), Cloudflare converts, chunks and embeds them, and `search` answers the chunks that match
+ *  a question, by meaning, by keyword, or both (`index_method`). The mind makes instances as it
+ *  runs, one per body of text or per tenant, and the binding reaches none outside the mind's
+ *  namespace.
+ *
+ *  `create(config)` answers the new instance's INFO, where the binding answers its handle:
+ *  `get(id)` is that handle, makes no call and is never wrong to ask for again. `search` and
+ *  `chatCompletions` here are over several instances at once, named in
+ *  `ai_search_options.instance_ids` (at most 10), with each chunk tagged by its instance.
+ *
+ *  REFUSED AS `INVALID_INPUT`: an instance over an R2 bucket (`type: "r2"`), which names a bucket
+ *  of the account and so could name another mind's files, and a `namespace` in a config. A web
+ *  crawl (`type: "web-crawler"`) is Cloudflare's own, of a site on the account. An instance that
+ *  does not exist fails at its first call, as `INVALID_INPUT`.
+ *
+ *  Indexing, storage and queries are billed to the account by Cloudflare, and a generated answer
+ *  (`chatCompletions`) as Workers AI besides. A destroy of the mind deletes every instance. */
+export type CfSearchApi = {
+  /** The namespace's instances, a page at a time (20 when `per_page` is omitted, at most 100). */
+  list(params?: AiSearchListInstancesParams): Promise<AiSearchListResponse>;
+  /** A new instance: `{ id }` alone is one with its own storage, for files uploaded to it. `id` is
+   *  lower-case letters, digits, `_` and single `-`. */
+  create(config: AiSearchConfig): Promise<AiSearchInstanceInfo>;
+  get(name: string): CfSearchInstanceApi;
+  /** The instance with all it indexed, for good. */
+  delete(name: string): Promise<void>;
+  search(request: AiSearchMultiSearchRequest): Promise<AiSearchMultiSearchResponse>;
+  chatCompletions(
+    request: AiSearchMultiChatCompletionsRequest & { stream: true },
+  ): Promise<ReadableStream>;
+  chatCompletions(
+    request: AiSearchMultiChatCompletionsRequest,
+  ): Promise<AiSearchMultiChatCompletionsResponse>;
+};
+
+/** `itx.search.get(name)`: the binding's `AiSearchInstance`. `chatCompletions` retrieves and then
+ *  writes an answer with a model; with `stream: true` it answers the server-sent events as a
+ *  stream, the retrieved chunks first. */
+export type CfSearchInstanceApi = {
+  search(request: AiSearchSearchRequest): Promise<AiSearchSearchResponse>;
+  chatCompletions(
+    request: AiSearchChatCompletionsRequest & { stream: true },
+  ): Promise<ReadableStream>;
+  chatCompletions(
+    request: AiSearchChatCompletionsRequest,
+  ): Promise<AiSearchChatCompletionsResponse>;
+  /** A part of the config, changed: hybrid search is `{ index_method: { vector: true, keyword:
+   *  true } }`. `type: "r2"` and `namespace` are refused, as at `create`. */
+  update(config: Partial<AiSearchConfig>): Promise<AiSearchInstanceInfo>;
+  info(): Promise<AiSearchInstanceInfo>;
+  /** How many items are queued, running, completed and failed, and what the index holds. */
+  stats(): Promise<AiSearchStatsResponse>;
+  items: CfSearchItemsApi;
+  jobs: CfSearchJobsApi;
+};
+
+/** A file for an instance: a text, or its bytes. No RPC carries a Blob. The item's NAME tells
+ *  Cloudflare the format by its extension (`notes.md`, `report.pdf`). */
+export type CfSearchItemContent = string | Uint8Array | ArrayBuffer;
+
+/** What `items.uploadFile` takes beside the upload's own options. `name`: the item's name, where
+ *  the file's path is not it. `wait`: answer once the item is indexed, as `uploadAndPoll` does,
+ *  or after `timeoutMs`. */
+export type CfSearchUploadFileOptions = AiSearchUploadItemOptions & {
+  name?: string;
+  wait?: boolean;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+};
+
+/** `itx.search.get(name).items`: the binding's `AiSearchItems`, and `uploadFile`, which takes a
+ *  file of the mind by its path. An upload under a name that is there replaces that item, and
+ *  one call carries at most 10 MiB, Cloudflare's largest file. `upload` answers once the item is
+ *  queued; `uploadAndPoll` waits until it is indexed, or until `timeoutMs` (30 s when omitted),
+ *  and answers the item with its `status` then. Indexing takes minutes, even for a short text,
+ *  and a search finds an item once its `status` is `completed`. `metadata` takes the fields that
+ *  the instance's `custom_metadata` names. */
+export type CfSearchItemsApi = {
+  list(params?: AiSearchListItemsParams): Promise<AiSearchListItemsResponse>;
+  upload(
+    name: string,
+    content: CfSearchItemContent,
+    options?: AiSearchUploadItemOptions,
+  ): Promise<AiSearchItemInfo>;
+  uploadAndPoll(
+    name: string,
+    content: CfSearchItemContent,
+    options?: AiSearchUploadItemOptions & { pollIntervalMs?: number; timeoutMs?: number },
+  ): Promise<AiSearchItemInfo>;
+  /** A FILE OF THE MIND INTO THE INSTANCE, by its path (`"/docs/notes.md"`): the platform reads
+   *  it, so its bytes never visit the caller, and it is uploaded with the file's own content
+   *  type. The item is named by the path without its leading slash, so the same path uploaded
+   *  again replaces its item. At most 10 MiB, as any item. */
+  uploadFile(path: string, options?: CfSearchUploadFileOptions): Promise<AiSearchItemInfo>;
+  /** By the item's `id`, as `list` and `upload` answer it: not by its name. */
+  get(itemId: string): CfSearchItemApi;
+  delete(itemId: string): Promise<void>;
+};
+
+/** `itx.search.get(name).items.get(itemId)`: the binding's `AiSearchItem`. `download` answers the
+ *  file's bytes in place of the binding's stream. */
+export type CfSearchItemApi = {
+  info(): Promise<AiSearchItemInfo>;
+  download(): Promise<{ data: Uint8Array; contentType: string; filename: string; size: number }>;
+  /** Indexes the item again. */
+  sync(): Promise<AiSearchItemInfo>;
+  logs(params?: AiSearchItemLogsParams): Promise<AiSearchItemLogsResponse>;
+  chunks(params?: AiSearchItemChunksParams): Promise<AiSearchItemChunksResponse>;
+};
+
+/** `itx.search.get(name).jobs`: the binding's `AiSearchJobs`, the runs that index an instance's
+ *  source. `create` starts one now. */
+export type CfSearchJobsApi = {
+  list(params?: AiSearchListJobsParams): Promise<AiSearchListJobsResponse>;
+  create(params?: AiSearchCreateJobParams): Promise<AiSearchJobInfo>;
+  get(jobId: string): CfSearchJobApi;
+};
+
+/** `itx.search.get(name).jobs.get(jobId)`: the binding's `AiSearchJob`. */
+export type CfSearchJobApi = {
+  info(): Promise<AiSearchJobInfo>;
+  logs(params?: AiSearchJobLogsParams): Promise<AiSearchJobLogsResponse>;
+  cancel(): Promise<AiSearchJobInfo>;
+};
 
 /** `connectToMcp`'s options: headers every request carries (`getSecret(…)` placeholders substitute
  *  at egress). */
@@ -2212,6 +2368,9 @@ export interface IterateContextApi {
   images: CfImagesApi;
   /** Cloudflare Artifacts, mind-scoped (`repos` is the friendlier surface). */
   cfArtifacts: CfArtifactsApi;
+  /** Cloudflare AI Search, the mind's own namespace: instances that index files and answer
+   *  questions over them. */
+  search: CfSearchApi;
   /** ONE COMMIT ON A GIT REMOTE'S `main`, with no repo of this mind: nothing is kept here, no
    *  context, no copy of the remote's files and no event. The tip is read, `changes` are applied
    *  to its files (whole files, as `repos.get(path).commitFiles` takes them), and the commit is

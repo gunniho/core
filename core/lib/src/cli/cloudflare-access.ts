@@ -65,6 +65,8 @@ export const STACK_SCOPES = [
   "workers-observability.write",
   // the repos' namespace, and the config repo's event subscription
   "artifacts.write",
+  // the mind's AI Search namespace, and at a destroy the instances that the mind made in it
+  "ai-search.write",
   // the sandboxes' container application
   "containers.write",
   // the two secrets of the Worker that holds the stack's state

@@ -112,5 +112,5 @@ limit`: once in each run of the launcher, about half a minute after its start or
 
 ## Gaps
 
-Workers AI, Browser Run and Images have no local form: each refuses in one sentence. Give agents a
-model key as a secret: it leaves through the door.
+Workers AI, Browser Run, Images and AI Search (`itx.search`) have no local form: each refuses in
+one sentence. Give agents a model key as a secret: it leaves through the door.

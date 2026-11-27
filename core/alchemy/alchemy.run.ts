@@ -15,6 +15,7 @@ import { MindMadeTelemetryTablesProvider } from "./src/mind-made-telemetry-table
 import { ContainerSnapshotProviders } from "./src/container-snapshots.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
 import { RetiredCloudflareOAuthClientProvider } from "./src/retired-cloudflare-oauth-client.ts";
+import { SearchNamespaceProviders } from "./src/search-namespace.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
 import {
   AccountApiTokenDeleteFallbackProvider,
@@ -64,6 +65,9 @@ export default Alchemy.Stack(
       // Alchemy's own provider of the sandbox's container application, where a destroy deletes it
       // although the registry refuses its saved snapshots, and names them (src/container-snapshots.ts)
       ContainerSnapshotProviders(),
+      // Alchemy's own provider of the mind's AI Search namespace, where a destroy first deletes
+      // the instances that the mind made in it (src/search-namespace.ts)
+      SearchNamespaceProviders(),
     ).pipe(Layer.provideMerge(Cloudflare.providers())),
     // The state, with the generated keys, lives in the mind's own account. Alchemy opens it for
     // a deploy and for a destroy, and a destroy does not run the stack's program: so both are

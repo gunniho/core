@@ -535,6 +535,13 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           },
           // a destroy erases the mind's files: it empties the bucket, then deletes it
           FILES: yield* Cloudflare.R2.Bucket("FILES", { name: names.files, forceDestroy: true }),
+          // The mind's own AI Search namespace: the mind makes its instances as it runs
+          // (`itx.search`), and the binding reaches no instance outside it. A destroy deletes
+          // those instances first, with all they indexed (./search-namespace.ts).
+          SEARCH: yield* Cloudflare.AI.SearchNamespace("Search", {
+            name: names.search,
+            description: `The search instances of the mind ${config.controlPlaneHostname}`,
+          }),
           AI: Cloudflare.Workers.AI(),
           BROWSER: Cloudflare.Workers.Browser(),
           IMAGES: Cloudflare.Images.Images(),

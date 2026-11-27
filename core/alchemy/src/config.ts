@@ -1,6 +1,7 @@
 // config.ts — THE ONE INPUT of the stack (./stack.ts): what `iterate deploy` learned from
 // the person and from Cloudflare. A JSON file, named in ITERATE_MIND_CONFIG. No field is optional
 // for a reason of history, and no variable of the environment changes what it means.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { domainOfOwnerEmailPattern, OwnerEmailPattern } from "iterate/mind-config";
 import { z } from "zod";
@@ -151,6 +152,21 @@ export function loadMindConfig(): MindConfig {
   return MindConfig.parse(JSON.parse(readFileSync(file, "utf8")));
 }
 
+/** Cloudflare's longest name for an AI Search namespace. */
+const SEARCH_NAMESPACE_NAME_MAX = 28;
+
+/** THE MIND'S AI SEARCH NAMESPACE: `<prefix>-search` where that fits Cloudflare's 28 characters,
+ *  which it does for a stage of up to 13. A longer stage keeps the first 19 characters of the
+ *  prefix and gets 8 hex characters of the whole name's SHA-256, so that two stages that start
+ *  alike get two namespaces. The name never changes for a stage: a change would replace the
+ *  namespace, and with it everything the mind indexed. */
+function searchNamespaceNameOf(prefix: string) {
+  const name = `${prefix}-search`;
+  if (name.length <= SEARCH_NAMESPACE_NAME_MAX) return name;
+  const digest = createHash("sha256").update(name).digest("hex").slice(0, 8);
+  return `${prefix.slice(0, SEARCH_NAMESPACE_NAME_MAX - 9)}-${digest}`;
+}
+
 /** Every name the stack gives a resource of the account. */
 export const namesOf = ({ alchemy }: { alchemy: { stageName: string } }) => {
   const prefix = `iterate-${alchemy.stageName}`;
@@ -166,6 +182,7 @@ export const namesOf = ({ alchemy }: { alchemy: { stageName: string } }) => {
     mindKv: `${prefix}-mind-kv`,
     files: `${prefix}-files`,
     repos: `${prefix}-repos`,
+    search: searchNamespaceNameOf(prefix),
     boundary: `${prefix}-boundary`,
     cloudflareEvents: `${prefix}-events`,
     telemetry: `${prefix}-telemetry`,

@@ -18,6 +18,8 @@ declare global {
       AI: Ai;
       ARTIFACTS: ArtifactsNamespace;
       FILES: R2Bucket;
+      /** The mind's own AI Search namespace: `itx.search` (./context/search.ts). */
+      SEARCH: AiSearchNamespace;
       /** The dataset of the mind's metrics: the kernel writes each context's to it. */
       TELEMETRY_METRICS: AnalyticsEngineDataset;
       /** Never read: the binding declares the class `ctx.exports.SandboxContainer` and gives it its

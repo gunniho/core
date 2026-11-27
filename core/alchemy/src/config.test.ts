@@ -59,6 +59,22 @@ void test("every resource's name starts with iterate-<stage>, with _ where Cloud
   for (const name of Object.values(names)) assert.match(name, /^iterate[-_]example[-_]com[-_]/);
 });
 
+void test("the AI Search namespace's name fits Cloudflare's 28 characters for any stage, and stays apart for stages that start alike", () => {
+  assert.equal(
+    namesOf({ alchemy: { stageName: "example-com" } }).search,
+    "iterate-example-com-search",
+  );
+  // the longest stage whose plain name fits
+  assert.equal(namesOf({ alchemy: { stageName: "a".repeat(13) } }).search.length, 28);
+  const long = namesOf({ alchemy: { stageName: "shop-example-company-co-uk" } }).search;
+  const alike = namesOf({ alchemy: { stageName: "shop-example-company-co-nz" } }).search;
+  for (const name of [long, alike]) assert.match(name, /^iterate-shop-exampl-[0-9a-f]{8}$/);
+  assert.notEqual(long, alike);
+  // the same for the same stage at every deploy: a new name would replace the namespace
+  assert.equal(long, namesOf({ alchemy: { stageName: "shop-example-company-co-uk" } }).search);
+  assert.equal(namesOf({ alchemy: { stageName: `a${"-b".repeat(15)}b` } }).search.length, 28);
+});
+
 void test("no config field names another state store: the store is iterate-<stage>-state", () => {
   const refused = MindConfig.safeParse({
     ...config(),

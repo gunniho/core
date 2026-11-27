@@ -205,7 +205,8 @@ Two refusals of a first deploy are known:
 
 ## What a destroy leaves
 
-A destroy erases the mind: its contexts, files, repos, members and secrets. It leaves:
+A destroy erases the mind: its contexts, files, repos, search instances, members and secrets. It
+leaves:
 
 - The state store: the Worker `iterate-<alchemy.stageName>-state`, and its two secrets
   in the account's Secrets Store, which are named after the Worker. A Secrets Store holds a

@@ -41,6 +41,7 @@
       "LOADER:Cloudflare.DynamicWorker",
       "MIND_KV:Cloudflare.KV.Namespace MindKv",
       "SANDBOX_CONTAINER:Cloudflare.DurableObject (class SandboxContainer, containers SandboxContainer)",
+      "SEARCH:Cloudflare.AI.SearchNamespace Search",
       "TELEMETRY_METRICS:Cloudflare.AnalyticsEngine.Dataset"
     ],
     "Boundary": [
@@ -97,6 +98,7 @@
       "LOADER:Cloudflare.DynamicWorker",
       "MIND_KV:Cloudflare.KV.Namespace MindKv",
       "SANDBOX_CONTAINER:Cloudflare.DurableObject (class SandboxContainer, containers SandboxContainer)",
+      "SEARCH:Cloudflare.AI.SearchNamespace Search",
       "TELEMETRY_METRICS:Cloudflare.AnalyticsEngine.Dataset"
     ],
     "Boundary": [

@@ -18,6 +18,7 @@ import { MINDS_ROOT_DESCRIPTION, mindsRoot } from "./context/minds.ts";
 import { gateOf } from "./context/held-verb-rules.ts";
 import { IMAGES_ROOT_DESCRIPTION, mindImages } from "./context/images.ts";
 import { r2Root } from "./context/r2.ts";
+import { cfSearch, SEARCH_ROOT_DESCRIPTION } from "./context/search.ts";
 import {
   SECRETS_ROOT_DESCRIPTION,
   secretsRoot,
@@ -157,6 +158,11 @@ defineItxHost({
         build: (scope) => approvalsRoot(scope, env.DOOR, controlPlaneOriginOf(config())),
       },
       browser: { description: BROWSER_ROOT_DESCRIPTION, build: () => cfBrowser(env.BROWSER) },
+      // with the mind's files, which `items.uploadFile(path)` reads
+      search: {
+        description: SEARCH_ROOT_DESCRIPTION,
+        build: () => cfSearch(env.SEARCH, env.FILES),
+      },
       // over a second `itx.r2` of the context's: what a write lands is the same
       images: {
         description: IMAGES_ROOT_DESCRIPTION,

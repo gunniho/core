@@ -145,7 +145,7 @@ The mind ${controlPlaneHostname} runs on this machine, in local workerd.
                                  (git clone with any user and the password in ${dir}/repos-token)
   telemetry                      metrics and events to the stack's telemetry Worker; no traces or Workers Logs
   sandboxes                      ${"image" in sandboxes ? `on: ${sandboxes.image} on ${sandboxes.socket}` : `off: ${sandboxes.off}`}
-  not at home                    Workers AI, Browser Run, Images: see README.md
+  not at home                    Workers AI, Browser Run, Images, AI Search: see README.md
 `);
 
 // workerd leaves a sandbox's sidecar container running when the sandbox ends
@@ -201,6 +201,7 @@ function mindBindings() {
     },
     BROWSER: standIn("BROWSER", "Browser Run has no local simulator."),
     IMAGES: standIn("IMAGES", "Cloudflare Images is not simulated at home."),
+    SEARCH: standIn("SEARCH", "AI Search has no local simulator."),
     // the mind's metrics go to the stack's telemetry Worker, through the link
     TELEMETRY_METRICS: { type: "worker", worker: "link", exportName: "HomeMetrics" },
   } as const;
